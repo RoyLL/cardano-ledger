@@ -65,6 +65,11 @@ import GHC.Records (HasField (..))
 
 -- ========================================================
 
+-- | The uninhabited type that marks the Babbage UTxO rule
+data BabbageUTXO era
+
+-- =============================================================
+
 -- | Predicate failure for the Babbage Era
 data BabbageUtxoPred era
   = FromAlonzoUtxoFail (UtxoPredicateFailure era)
