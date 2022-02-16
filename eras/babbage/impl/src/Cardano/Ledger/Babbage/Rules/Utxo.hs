@@ -131,7 +131,80 @@ import Cardano.Ledger.Rules.ValidationMode
     runValidationTransMaybe,
   )
 import Control.Monad.Trans.Reader (asks)  
-  
+
+-- =======================================================
+
+-- | feesOK can differ from Era to Era, as new notions of fees arise. This is the Babbage version
+--   See: Figure 2: Functions related to fees and collateral, in the Babbage specification
+--   In the spec feesOK is a boolean function. Because wee need to handle predicate failures
+--   in the implementaion, it is coded as a TransitionRule. It will return () if it succeeds,
+--   and raise an error (rather than return) if any of the required parts are False.
+--   This version is generic in that it can be lifted to any PredicateFailure type that
+--   embeds BabbageUtxoPred era. This makes it possibly useful in future Eras.
+
+
+
+{-
+feesOK ::
+  forall era utxo.
+  ( Era era,
+    ValidateScript era, -- isTwoPhaseScriptAddress
+    Core.Tx era ~ ValidatedTx era,
+    Core.Witnesses era ~ TxWitness era,
+    Core.TxBody era ~ TxBody era,
+    FeeNeeds era
+  ) =>
+  (BabbageUtxoPred era -> PredicateFailure (utxo era)) ->
+  Core.PParams era ->
+  Core.Tx era ->
+  UTxO era ->
+  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+feesOK lift pp tx (UTxO utxo) = do
+  let txb = getField @"body" tx
+      theFee = txfee' txb -- Coin supplied to pay fees
+      minimumFee = minfee @era pp tx
+      lift2 = lift . FromAlonzoUtxoFail
+  -- Part 1  (minfee pp tx ≤ txfee tx )
+  (minimumFee <= theFee) ?! lift2 (FeeTooSmallUTxO minimumFee theFee)
+
+  -- Part 2 (txrdmrs tx /= ◇ ⇒ ... )
+  unless (nullRedeemers . txrdmrs' . wits $ tx) $ do
+    -- Part 3 ((∀(a, , ) ∈ range (collInputs txb ◁ utxo), paymentHK a ∈ Addr^{vkey})
+    let collateral = collateralInputs' txb SplitMap.◁ utxo
+    -- UTxO restricted to the inputs allocated to pay the Fee
+    all vKeyLocked collateral
+      ?! lift2 (ScriptsNotPaidUTxO (UTxO (SplitMap.filter (not . vKeyLocked) collateral)))
+
+    -- Part 4 (balance ≥ minCollateral tx pp)
+    let valbalance = collBalance txb (UTxO utxo)
+        balance = coin valbalance
+    balance >= minCollateral txb pp ?! lift2 (InsufficientCollateral balance (minCollateral txb pp))
+
+    -- Part 5 (adaOnly balance)
+    adaOnly valbalance ?! lift2 (CollateralContainsNonADA valbalance)
+
+    -- Part 6 ((txcoll tx 6 = 3) ⇒ balance = txcoll tx)
+    case collateralReturn' txb of
+      SNothing -> pure ()
+      SJust _txout -> balance == total ?! lift (UnequalCollateralReturn balance total)
+        where
+          total = totalCollateral' txb
+
+    -- Part 7 (collInputs tx 6 = ∅)
+    not (Set.null (collateralInputs' txb)) ?! lift2 NoCollateralInputs
+
+    pure ()
+
+-}
+
+
+
+
+
+
+
+
+
 -- ========================================================
 
 -- | Predicate failure for the Babbage Era
