@@ -55,7 +55,7 @@ import Cardano.Ledger.Coin (Coin (..))
 import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Era (Era (..), getTxOutBootstrapAddress)
 import Cardano.Ledger.Keys (GenDelegs, KeyHash, KeyRole (..))
-import Cardano.Ledger.Rules.ValidationMode (runValidation)
+import Cardano.Ledger.Rules.ValidationMode (Inject (..), runValidation)
 import Cardano.Ledger.Serialization
   ( decodeList,
     decodeRecordSum,
@@ -632,3 +632,11 @@ instance
   where
   wrapFailed = UpdateFailure
   wrapEvent = UpdateEvent
+
+-- =================================
+
+instance
+  PredicateFailure (Core.EraRule "PPUP" era) ~ PpupPredicateFailure era =>
+  Inject (PpupPredicateFailure era) (UtxoPredicateFailure era)
+  where
+  inject = UpdateFailure

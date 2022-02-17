@@ -14,6 +14,105 @@
 
 module Cardano.Ledger.Babbage.Rules.Utxo where
 
+-- import Cardano.Ledger.Babbage.Rules.Utxos (BabbageUTXOS)
+
+-- AlonzoUtxoNeeds,
+-- FeeNeeds,
+-- UtxoDelta (UtxoDelta),
+
+-- genericAlonzoUtxo,
+
+import Cardano.Binary (FromCBOR (..), ToCBOR (..), serialize)
+import Cardano.Ledger.Address
+  ( Addr (..),
+    RewardAcnt,
+    getNetwork,
+    getRwdNetwork,
+  )
+import Cardano.Ledger.Alonzo.Data (DataHash, dataHashSize)
+import Cardano.Ledger.Alonzo.Rules.Utxo
+  ( AlonzoUTXO,
+    UtxoEvent (..),
+    UtxoPredicateFailure (..),
+    fromShelleyFailure,
+    fromShelleyMAFailure,
+    vKeyLocked,
+    validateCollateral,
+    validateCollateralContainsNonADA,
+    validateExUnitsTooBigUTxO,
+    validateInsufficientCollateral,
+    validateOutputTooBigUTxO,
+    validateOutputTooSmallUTxO,
+    validateOutsideForecast,
+    validateScriptsNotPaidUTxO,
+    validateTooManyCollateralInputs,
+    validateWrongNetworkInTxBody,
+  )
+import Cardano.Ledger.Alonzo.Rules.Utxos (UTXOS, UtxosPredicateFailure (..))
+import Cardano.Ledger.Alonzo.Rules.Utxow (AlonzoPredFail)
+import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices, pointWiseExUnits)
+import Cardano.Ledger.Alonzo.Tx (ValidatedTx (..), minfee, totExUnits)
+import qualified Cardano.Ledger.Alonzo.Tx as Alonzo (ValidatedTx)
+import qualified Cardano.Ledger.Alonzo.TxSeq as Alonzo (TxSeq)
+import Cardano.Ledger.Alonzo.TxWitness (TxWitness (..), nullRedeemers)
+import Cardano.Ledger.Babbage.Collateral (collBalance, feesOK, minCollateral)
+import Cardano.Ledger.Babbage.Tx (ValidatedTx (..), txouts, wits)
+import Cardano.Ledger.Babbage.TxBody
+  ( TxBody (..),
+    TxOut,
+    collateral',
+    collateralReturn',
+    totalCollateral',
+    txfee',
+  )
+import Cardano.Ledger.BaseTypes
+  ( Network,
+    ShelleyBase,
+    StrictMaybe (..),
+    epochInfoWithErr,
+    networkId,
+    systemStart,
+  )
+import Cardano.Ledger.Coin
+import Cardano.Ledger.CompactAddress
+  ( CompactAddr,
+    isBootstrapCompactAddr,
+    isPayCredScriptCompactAddr,
+  )
+import qualified Cardano.Ledger.Core as Core
+import Cardano.Ledger.Era (Era (..), ValidateScript (..))
+import qualified Cardano.Ledger.Era as Era
+import Cardano.Ledger.Rules.ValidationMode
+  ( mapMaybeValidation,
+    runValidation,
+    runValidationStatic,
+    runValidationStaticTransMaybe,
+    runValidationTransMaybe,
+  )
+import Cardano.Ledger.Shelley.Constraints (UsesPParams)
+import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
+import qualified Cardano.Ledger.Shelley.Rules.Utxo as Shelley
+import Cardano.Ledger.Shelley.Tx (TxIn)
+import Cardano.Ledger.Shelley.TxBody (DCert, Wdrl, unWdrl)
+import qualified Cardano.Ledger.ShelleyMA.Rules.Utxo as ShelleyMA
+  ( validateOutsideValidityIntervalUTxO,
+    validateTriesToForgeADA,
+    validateValueNotConservedUTxO,
+  )
+import Cardano.Ledger.ShelleyMA.Timelocks (ValidityInterval (..), inInterval)
+import Control.Monad.Trans.Reader (asks)
+import Control.State.Transition.Extended
+  ( Embed (..),
+    Rule,
+    RuleType (Transition),
+    STS (..),
+    TRC (..),
+    TransitionRule (..),
+    judgmentContext,
+    liftSTS,
+    trans,
+    (?!),
+  )
 import Data.Coerce (coerce)
 import qualified Data.Compact.SplitMap as SplitMap
 import Data.Either (isRight)
@@ -30,108 +129,6 @@ import NoThunks.Class (NoThunks)
 import Numeric.Natural (Natural)
 import Validation
 
-import Cardano.Ledger.Alonzo.Rules.Utxos (UtxosPredicateFailure (..))
-import Cardano.Ledger.Alonzo.Rules.Utxow (AlonzoPredFail)
-import Cardano.Ledger.Alonzo.Tx (minfee)
-import Cardano.Ledger.Alonzo.TxWitness (TxWitness (..), nullRedeemers)
-import Cardano.Ledger.Babbage.Collateral (collBalance, minCollateral,feesOK)
--- import Cardano.Ledger.Babbage.Rules.Utxos (BabbageUTXOS)
-import Cardano.Ledger.Babbage.Tx (ValidatedTx (..), wits, txouts)
-import Cardano.Ledger.Babbage.TxBody
-  ( TxBody (..),
-    TxOut,
-    collateral',
-    collateralReturn',
-    totalCollateral',
-    txfee',
-  )
-import Cardano.Ledger.Alonzo.Rules.Utxo
-  ( validateCollateral,
-    validateScriptsNotPaidUTxO,
-    validateInsufficientCollateral,
-    validateCollateralContainsNonADA,
-    validateOutsideForecast,
-    validateOutputTooSmallUTxO,
-    validateOutputTooBigUTxO,
-    validateWrongNetworkInTxBody,
-    validateExUnitsTooBigUTxO,
-    validateTooManyCollateralInputs,
-    -- AlonzoUtxoNeeds,
-    -- FeeNeeds,
-    -- UtxoDelta (UtxoDelta),
-    UtxoEvent (..),
-    UtxoPredicateFailure (..),
-    -- genericAlonzoUtxo,
-    vKeyLocked,
-    AlonzoUTXO,
-    fromShelleyFailure,
-    fromShelleyMAFailure,
-  )
-import qualified Cardano.Ledger.ShelleyMA.Rules.Utxo as ShelleyMA
- ( validateOutsideValidityIntervalUTxO,
-   validateValueNotConservedUTxO,
-   validateTriesToForgeADA,
- )
- 
-import qualified Cardano.Ledger.Core as Core
-import Control.State.Transition.Extended
-  ( Embed (..),
-    Rule,
-    RuleType (Transition),
-    STS (..),
-    TRC(..),
-    TransitionRule(..),
-    (?!),
-    liftSTS,
-    trans,
-    judgmentContext,
-  )
-import Cardano.Ledger.Address
-  ( Addr (..),
-    RewardAcnt,
-    getNetwork,
-    getRwdNetwork,
-  )
-import Cardano.Ledger.Alonzo.Data (DataHash, dataHashSize)
-import Cardano.Ledger.Alonzo.Rules.Utxos (UTXOS, UtxosPredicateFailure)
-import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices, pointWiseExUnits)
-import Cardano.Ledger.Alonzo.Tx (ValidatedTx (..), minfee, totExUnits)
-import qualified Cardano.Ledger.Alonzo.Tx as Alonzo (ValidatedTx)
-import qualified Cardano.Ledger.Alonzo.TxSeq as Alonzo (TxSeq)
-import Cardano.Ledger.Alonzo.TxWitness (TxWitness (txrdmrs'), nullRedeemers)
-import Cardano.Ledger.BaseTypes
-  ( Network,
-    ShelleyBase,
-    StrictMaybe (..),
-    epochInfoWithErr,
-    networkId,
-    systemStart,
-  )
-import Cardano.Ledger.Coin
-import Cardano.Ledger.CompactAddress
-  ( CompactAddr,
-    isBootstrapCompactAddr,
-    isPayCredScriptCompactAddr,
-  )
-
-import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
-import qualified Cardano.Ledger.Shelley.Rules.Utxo as Shelley
-import Cardano.Ledger.Era (Era (..), ValidateScript (..))
-import qualified Cardano.Ledger.Era as Era
-import Cardano.Ledger.Shelley.Tx (TxIn)
-import Cardano.Ledger.Shelley.TxBody (DCert, Wdrl, unWdrl)
-import Cardano.Binary (FromCBOR (..), ToCBOR (..), serialize)
-import Cardano.Ledger.Shelley.Constraints (UsesPParams)
-import Cardano.Ledger.ShelleyMA.Timelocks (ValidityInterval (..), inInterval)
-import Cardano.Ledger.Rules.ValidationMode
-  ( mapMaybeValidation,
-    runValidation,
-    runValidationStatic,
-    runValidationStaticTransMaybe,
-    runValidationTransMaybe,
-  )
-import Control.Monad.Trans.Reader (asks)  
-
 -- =======================================================
 
 -- | feesOK can differ from Era to Era, as new notions of fees arise. This is the Babbage version
@@ -141,8 +138,6 @@ import Control.Monad.Trans.Reader (asks)
 --   and raise an error (rather than return) if any of the required parts are False.
 --   This version is generic in that it can be lifted to any PredicateFailure type that
 --   embeds BabbageUtxoPred era. This makes it possibly useful in future Eras.
-
-
 
 {-
 feesOK ::
@@ -197,14 +192,6 @@ feesOK lift pp tx (UTxO utxo) = do
 
 -}
 
-
-
-
-
-
-
-
-
 -- ========================================================
 
 -- | Predicate failure for the Babbage Era
@@ -230,6 +217,7 @@ deriving instance
   Eq (BabbageUtxoPred era)
 
 -- TODO FIXME  add CBOR instances
+
 -- | The UTxO transition rule for the Alonzo eras.
 utxoTransition ::
   forall era.
@@ -342,7 +330,6 @@ utxoTransition = do
   runValidation $ validateTooManyCollateralInputs pp txb
 
   trans @(Core.EraRule "UTXOS" era) =<< coerce <$> judgmentContext
-
 
 whoops :: Bool -> Validation (NonEmpty (UtxoPredicateFailure era)) ()
 whoops x = undefined

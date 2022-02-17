@@ -100,7 +100,7 @@ import Validation
 
 -- | The Predicate failure type in the Alonzo Era. It embeds the Predicate
 --   failure type of the Shelley Era, as they share some failure modes.
-data AlonzoPredFail era
+data UtxowPredicateFail era
   = WrappedShelleyEraFailure !(UtxowPredicateFailure era)
   | MissingRedeemers ![(ScriptPurpose (Crypto era), ScriptHash (Crypto era))]
   | MissingRequiredDatums
@@ -124,21 +124,21 @@ deriving instance
     Show (PredicateFailure (Core.EraRule "UTXO" era)), -- The Shelley UtxowPredicateFailure needs this to Show
     Show (Core.Script era)
   ) =>
-  Show (AlonzoPredFail era)
+  Show (UtxowPredicateFail era)
 
 deriving instance
   ( Era era,
     Eq (PredicateFailure (Core.EraRule "UTXO" era)), -- The Shelley UtxowPredicateFailure needs this to Eq
     Eq (Core.Script era)
   ) =>
-  Eq (AlonzoPredFail era)
+  Eq (UtxowPredicateFail era)
 
 instance
   ( Era era,
     NoThunks (Core.Script era),
     NoThunks (PredicateFailure (Core.EraRule "UTXO" era))
   ) =>
-  NoThunks (AlonzoPredFail era)
+  NoThunks (UtxowPredicateFail era)
 
 instance
   ( Era era,
@@ -147,7 +147,7 @@ instance
     Typeable (Core.Script era),
     ToCBOR (Core.Script era)
   ) =>
-  ToCBOR (AlonzoPredFail era)
+  ToCBOR (UtxowPredicateFail era)
   where
   toCBOR x = encode (encodePredFail x)
 
@@ -160,8 +160,8 @@ encodePredFail ::
     Typeable (Core.Script era),
     Typeable (Core.AuxiliaryData era)
   ) =>
-  AlonzoPredFail era ->
-  Encode 'Open (AlonzoPredFail era)
+  UtxowPredicateFail era ->
+  Encode 'Open (UtxowPredicateFail era)
 encodePredFail (WrappedShelleyEraFailure x) = Sum WrappedShelleyEraFailure 0 !> E toCBOR x
 encodePredFail (MissingRedeemers x) = Sum MissingRedeemers 1 !> To x
 encodePredFail (MissingRequiredDatums x y) = Sum MissingRequiredDatums 2 !> To x !> To y
@@ -177,9 +177,9 @@ instance
     Typeable (Core.Script era),
     Typeable (Core.AuxiliaryData era)
   ) =>
-  FromCBOR (AlonzoPredFail era)
+  FromCBOR (UtxowPredicateFail era)
   where
-  fromCBOR = decode (Summands "(AlonzoPredFail" decodePredFail)
+  fromCBOR = decode (Summands "(UtxowPredicateFail" decodePredFail)
 
 decodePredFail ::
   ( Era era,
@@ -188,7 +188,7 @@ decodePredFail ::
     Typeable (Core.AuxiliaryData era)
   ) =>
   Word ->
-  Decode 'Open (AlonzoPredFail era)
+  Decode 'Open (UtxowPredicateFail era)
 decodePredFail 0 = SumD WrappedShelleyEraFailure <! D fromCBOR
 decodePredFail 1 = SumD MissingRedeemers <! From
 decodePredFail 2 = SumD MissingRequiredDatums <! From <! From
@@ -246,7 +246,7 @@ alonzoStyleWitness ::
     Environment (utxow era) ~ UtxoEnv era,
     State (utxow era) ~ UTxOState era,
     Signal (utxow era) ~ ValidatedTx era,
-    PredicateFailure (utxow era) ~ AlonzoPredFail era,
+    PredicateFailure (utxow era) ~ UtxowPredicateFail era,
     STS (utxow era),
     -- Supply the HasField and Validate instances for Alonzo
     ShelleyStyleWitnessNeeds era,
@@ -524,7 +524,7 @@ instance
   type Signal (AlonzoUTXOW era) = ValidatedTx era
   type Environment (AlonzoUTXOW era) = UtxoEnv era
   type BaseM (AlonzoUTXOW era) = ShelleyBase
-  type PredicateFailure (AlonzoUTXOW era) = AlonzoPredFail era
+  type PredicateFailure (AlonzoUTXOW era) = UtxowPredicateFail era
   type Event (AlonzoUTXOW era) = AlonzoEvent era
   transitionRules = [alonzoStyleWitness]
   initialRules = []
@@ -535,7 +535,7 @@ instance
     PredicateFailure (Core.EraRule "UTXO" era) ~ Alonzo.UtxoPredicateFailure era,
     Event (Core.EraRule "UTXO" era) ~ Alonzo.UtxoEvent era,
     BaseM (AlonzoUTXOW era) ~ ShelleyBase,
-    PredicateFailure (AlonzoUTXOW era) ~ AlonzoPredFail era,
+    PredicateFailure (AlonzoUTXOW era) ~ UtxowPredicateFail era,
     Event (AlonzoUTXOW era) ~ AlonzoEvent era
   ) =>
   Embed (AlonzoUTXO era) (AlonzoUTXOW era)

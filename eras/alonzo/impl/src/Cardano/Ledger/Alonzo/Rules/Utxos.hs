@@ -52,7 +52,7 @@ import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Era (Crypto, Era, ValidateScript)
 import Cardano.Ledger.Keys (KeyHash, KeyRole (Witness))
 import Cardano.Ledger.Mary.Value (Value)
-import Cardano.Ledger.Rules.ValidationMode (lblStatic)
+import Cardano.Ledger.Rules.ValidationMode (Inject (..), lblStatic)
 import Cardano.Ledger.Shelley.LedgerState (PPUPState (..), UTxOState (..), keyRefunds, updateStakeDistribution)
 import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
 import Cardano.Ledger.Shelley.PParams (Update)
@@ -345,6 +345,15 @@ data UtxosPredicateFailure era
   | UpdateFailure (PredicateFailure (Core.EraRule "PPUP" era))
   deriving
     (Generic)
+
+instance
+  PredicateFailure (Core.EraRule "PPUP" era) ~ PpupPredicateFailure era =>
+  Inject (PpupPredicateFailure era) (UtxosPredicateFailure era)
+  where
+  inject = UpdateFailure
+
+instance Inject (UtxosPredicateFailure era) (UtxosPredicateFailure era) where
+  inject = id
 
 instance
   ( Era era,

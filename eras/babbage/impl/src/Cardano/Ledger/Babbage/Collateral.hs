@@ -20,7 +20,7 @@ import Cardano.Ledger.Babbage.TxBody
     outputs',
     txfee',
   )
-import Cardano.Ledger.BaseTypes(txIxFromIntegral)
+import Cardano.Ledger.BaseTypes (txIxFromIntegral)
 import Cardano.Ledger.Coin (Coin (..))
 import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Era (Era (Crypto), ValidateScript (..))
@@ -86,10 +86,10 @@ collOuts txb =
   case collateralReturn' txb of
     SNothing -> UTxO SplitMap.empty
     SJust txout -> UTxO (SplitMap.singleton (TxIn (txid txb) index) txout)
-      where index = case txIxFromIntegral (length (outputs' txb)) of
-                      Just i -> i
-                      Nothing -> error ("length outputs, should always fit in a TxIx")
-
+      where
+        index = case txIxFromIntegral (length (outputs' txb)) of
+          Just i -> i
+          Nothing -> error ("length outputs, should always fit in a TxIx")
 
 feesOK :: Core.PParams era -> Core.Tx era -> UTxO era -> Bool
 feesOK _pparams _tx _utxo = undefined

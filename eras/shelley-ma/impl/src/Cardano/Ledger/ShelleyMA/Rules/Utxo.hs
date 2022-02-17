@@ -25,7 +25,7 @@ import Cardano.Ledger.Coin
 import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Era (Era (..))
 import Cardano.Ledger.Keys (KeyHash, KeyRole (..))
-import Cardano.Ledger.Rules.ValidationMode (runValidation, runValidationTransMaybe)
+import Cardano.Ledger.Rules.ValidationMode (Inject (..), InjectMaybe (..), runValidation, runValidationTransMaybe)
 import Cardano.Ledger.Shelley.Constraints
   ( TransValue,
     UsesAuxiliary,
@@ -165,6 +165,12 @@ fromShelleyFailure = \case
   Shelley.OutputTooSmallUTxO {} -> Nothing -- Rule was updated
   Shelley.UpdateFailure ppf -> Just $ UpdateFailure ppf
   Shelley.OutputBootAddrAttrsTooBig outs -> Just $ OutputBootAddrAttrsTooBig outs
+
+instance InjectMaybe (Shelley.UtxoPredicateFailure era) (UtxoPredicateFailure era) where
+  injectMaybe = fromShelleyFailure
+
+instance Inject (UtxoPredicateFailure era) (UtxoPredicateFailure era) where
+  inject = id
 
 deriving stock instance
   ( Shelley.TransUTxOState Show era,

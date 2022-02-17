@@ -19,8 +19,8 @@ import Cardano.Ledger.Babbage.TxBody
   ( Datum (..),
     TxBody (..),
     TxOut (..),
-    referenceInputs',
     inputs',
+    referenceInputs',
   )
 import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Era (Crypto, Era, ValidateScript (isNativeScript))
