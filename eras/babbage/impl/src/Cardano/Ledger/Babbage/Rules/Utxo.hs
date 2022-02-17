@@ -48,8 +48,10 @@ import Cardano.Ledger.Alonzo.Rules.Utxo
     validateTooManyCollateralInputs,
     validateWrongNetworkInTxBody,
   )
+-- --------------------------------
+
 import Cardano.Ledger.Alonzo.Rules.Utxos (UTXOS, UtxosPredicateFailure (..))
-import Cardano.Ledger.Alonzo.Rules.Utxow (AlonzoPredFail)
+import Cardano.Ledger.Alonzo.Rules.Utxow (UtxowPredicateFail)
 import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices, pointWiseExUnits)
 import Cardano.Ledger.Alonzo.Tx (ValidatedTx (..), minfee, totExUnits)
 import qualified Cardano.Ledger.Alonzo.Tx as Alonzo (ValidatedTx)
@@ -83,7 +85,11 @@ import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Era (Era (..), ValidateScript (..))
 import qualified Cardano.Ledger.Era as Era
 import Cardano.Ledger.Rules.ValidationMode
-  ( mapMaybeValidation,
+  ( Inject (..),
+    InjectMaybe (..),
+    mapMaybeValidation,
+    runTest,
+    runTestOnSignal,
     runValidation,
     runValidationStatic,
     runValidationStaticTransMaybe,
@@ -95,7 +101,8 @@ import qualified Cardano.Ledger.Shelley.Rules.Utxo as Shelley
 import Cardano.Ledger.Shelley.Tx (TxIn)
 import Cardano.Ledger.Shelley.TxBody (DCert, Wdrl, unWdrl)
 import qualified Cardano.Ledger.ShelleyMA.Rules.Utxo as ShelleyMA
-  ( validateOutsideValidityIntervalUTxO,
+  ( UtxoPredicateFailure,
+    validateOutsideValidityIntervalUTxO,
     validateTriesToForgeADA,
     validateValueNotConservedUTxO,
   )
@@ -128,6 +135,54 @@ import GHC.Records
 import NoThunks.Class (NoThunks)
 import Numeric.Natural (Natural)
 import Validation
+
+-- ======================================================
+
+-- | Predicate failure for the Babbage Era
+data BabbageUtxoPred era
+  = FromAlonzoUtxoFail (UtxoPredicateFailure era) -- Inherited from Alonzo
+  | FromAlonzoUtxowFail (UtxowPredicateFail era) -- Not sure this makes sense
+  | UnequalCollateralReturn Coin Coin
+
+deriving instance
+  ( Era era,
+    Show (UtxoPredicateFailure era),
+    Show (PredicateFailure (Core.EraRule "UTXO" era)),
+    Show (Core.Script era)
+  ) =>
+  Show (BabbageUtxoPred era)
+
+deriving instance
+  ( Era era,
+    Eq (UtxoPredicateFailure era),
+    Eq (PredicateFailure (Core.EraRule "UTXO" era)),
+    Eq (Core.Script era)
+  ) =>
+  Eq (BabbageUtxoPred era)
+
+-- ===============================================
+-- Inject instances
+
+instance Inject (UtxoPredicateFailure era) (BabbageUtxoPred era) where
+  inject = FromAlonzoUtxoFail
+
+instance Inject (UtxowPredicateFail era) (BabbageUtxoPred era) where
+  inject = FromAlonzoUtxowFail
+
+instance Inject (BabbageUtxoPred era) (BabbageUtxoPred era) where
+  inject = id
+
+instance
+  Inject (PredicateFailure (Core.EraRule "PPUP" era)) (PredicateFailure (Core.EraRule "UTXOS" era)) =>
+  Inject (ShelleyMA.UtxoPredicateFailure era) (BabbageUtxoPred era)
+  where
+  inject = FromAlonzoUtxoFail . inject
+
+instance
+  Inject (PredicateFailure (Core.EraRule "PPUP" era)) (PredicateFailure (Core.EraRule "UTXOS" era)) =>
+  Inject (Shelley.UtxoPredicateFailure era) (BabbageUtxoPred era)
+  where
+  inject = FromAlonzoUtxoFail . inject
 
 -- =======================================================
 
@@ -194,27 +249,7 @@ feesOK lift pp tx (UTxO utxo) = do
 
 -- ========================================================
 
--- | Predicate failure for the Babbage Era
-data BabbageUtxoPred era
-  = FromAlonzoUtxoFail (UtxoPredicateFailure era)
-  | FromAlonzoUtxowFail (AlonzoPredFail era)
-  | UnequalCollateralReturn Coin Coin
-
-deriving instance
-  ( Era era,
-    Show (UtxoPredicateFailure era),
-    Show (PredicateFailure (Core.EraRule "UTXO" era)),
-    Show (Core.Script era)
-  ) =>
-  Show (BabbageUtxoPred era)
-
-deriving instance
-  ( Era era,
-    Eq (UtxoPredicateFailure era),
-    Eq (PredicateFailure (Core.EraRule "UTXO" era)),
-    Eq (Core.Script era)
-  ) =>
-  Eq (BabbageUtxoPred era)
+{-
 
 -- TODO FIXME  add CBOR instances
 
@@ -331,5 +366,6 @@ utxoTransition = do
 
   trans @(Core.EraRule "UTXOS" era) =<< coerce <$> judgmentContext
 
+-}
 whoops :: Bool -> Validation (NonEmpty (UtxoPredicateFailure era)) ()
 whoops x = undefined

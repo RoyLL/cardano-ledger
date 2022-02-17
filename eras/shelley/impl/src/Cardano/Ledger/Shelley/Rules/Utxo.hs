@@ -640,3 +640,6 @@ instance
   Inject (PpupPredicateFailure era) (UtxoPredicateFailure era)
   where
   inject = UpdateFailure
+
+instance Inject (UtxoPredicateFailure era) (UtxoPredicateFailure era) where
+  inject = id

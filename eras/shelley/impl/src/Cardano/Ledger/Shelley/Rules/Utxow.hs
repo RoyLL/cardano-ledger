@@ -64,7 +64,11 @@ import Cardano.Ledger.Keys
     VKey,
     asWitness,
   )
-import Cardano.Ledger.Rules.ValidationMode (runValidation, runValidationStatic)
+import Cardano.Ledger.Rules.ValidationMode
+  ( Inject (..),
+    runTest,
+    runTestOnSignal,
+  )
 import Cardano.Ledger.SafeHash (extractHash, hashAnnotated)
 import Cardano.Ledger.Serialization
   ( decodeList,
@@ -332,28 +336,28 @@ transitionRulesUTXOW = do
   -- check scripts
   {-  ∀ s ∈ range(txscripts txw) ∩ Scriptnative), runNativeScript s tx   -}
 
-  runValidationStatic $ validateFailedScripts tx
+  runTestOnSignal $ validateFailedScripts tx
 
   {-  { s | (_,s) ∈ scriptsNeeded utxo tx} = dom(txscripts txw)          -}
-  runValidation $ validateMissingScripts pp utxo tx
+  runTest $ validateMissingScripts pp utxo tx
 
   -- check VKey witnesses
 
   {-  ∀ (vk ↦ σ) ∈ (txwitsVKey txw), V_vk⟦ txbodyHash ⟧_σ                -}
-  runValidationStatic $ validateVerifiedWits tx
+  runTestOnSignal $ validateVerifiedWits tx
 
   {-  witsVKeyNeeded utxo tx genDelegs ⊆ witsKeyHashes                   -}
-  runValidation $ validateNeededWitnesses genDelegs utxo tx witsKeyHashes
+  runTest $ validateNeededWitnesses genDelegs utxo tx witsKeyHashes
 
   -- check metadata hash
   {-  ((adh = ◇) ∧ (ad= ◇)) ∨ (adh = hashAD ad)                          -}
-  runValidationStatic $ validateMetadata pp tx
+  runTestOnSignal $ validateMetadata pp tx
 
   -- check genesis keys signatures for instantaneous rewards certificates
   {-  genSig := { hashKey gkey | gkey ∈ dom(genDelegs)} ∩ witsKeyHashes  -}
   {-  { c ∈ txcerts txb ∩ DCert_mir} ≠ ∅  ⇒ (|genSig| ≥ Quorum) ∧ (d pp > 0)  -}
   coreNodeQuorum <- liftSTS $ asks quorum
-  runValidation $
+  runTest $
     validateMIRInsufficientGenesisSigs genDelegs coreNodeQuorum witsKeyHashes tx
 
   trans @(Core.EraRule "UTXO" era) $
@@ -609,3 +613,15 @@ validateMIRInsufficientGenesisSigs (GenDelegs genMapping) coreNodeQuorum witsKey
    in failureUnless
         (not (null mirCerts) ==> Set.size genSig >= fromIntegral coreNodeQuorum)
         $ MIRInsufficientGenesisSigsUTXOW genSig
+
+-- ===================================================
+-- Inject Instances
+
+instance Inject (UtxowPredicateFailure era) (UtxowPredicateFailure era) where
+  inject = id
+
+instance
+  PredicateFailure (Core.EraRule "UTXO" era) ~ UtxoPredicateFailure era =>
+  Inject (UtxoPredicateFailure era) (UtxowPredicateFailure era)
+  where
+  inject = UtxoFailure
