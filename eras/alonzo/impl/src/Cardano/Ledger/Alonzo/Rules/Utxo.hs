@@ -47,6 +47,7 @@ import Cardano.Ledger.Rules.ValidationMode
   ( Inject (..),
     InjectMaybe (..),
     mapMaybeValidation,
+    Test,
     runTest,
     runTestOnSignal,
   )
@@ -84,7 +85,6 @@ import Data.Coerce (coerce)
 import qualified Data.Compact.SplitMap as SplitMap
 import Data.Either (isRight)
 import Data.Foldable (foldl', sequenceA_)
-import Data.List.NonEmpty (NonEmpty)
 import Data.Ratio ((%))
 import Data.Sequence.Strict (StrictSeq)
 import Data.Set (Set)
@@ -265,7 +265,7 @@ feesOK ::
   Core.PParams era ->
   Core.Tx era ->
   UTxO era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 feesOK pp tx (UTxO utxo) =
   let txb = getField @"body" tx
       collateral = getField @"collateral" txb -- Inputs allocated to pay txfee
@@ -289,7 +289,7 @@ validateCollateral ::
   Core.TxBody era ->
   SplitMap.SplitMap (TxIn (Crypto era)) (Core.TxOut era) ->
   Core.Value era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateCollateral pp txb utxoCollateral bal =
   sequenceA_
     [ -- Part 3: (∀(a,_,_) ∈ range (collateral txb ◁ utxo), a ∈ Addrvkey)
@@ -306,7 +306,7 @@ validateCollateral pp txb utxoCollateral bal =
 validateScriptsNotPaidUTxO ::
   Era era =>
   SplitMap.SplitMap (TxIn (Crypto era)) (Core.TxOut era) ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateScriptsNotPaidUTxO utxoCollateral =
   failureUnless (all vKeyLocked utxoCollateral) $
     ScriptsNotPaidUTxO (UTxO (SplitMap.filter (not . vKeyLocked) utxoCollateral))
@@ -320,7 +320,7 @@ validateInsufficientCollateral ::
   Core.PParams era ->
   Core.TxBody era ->
   Core.Value era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateInsufficientCollateral pp txb bal =
   failureUnless (Val.scale (100 :: Int) (Val.coin bal) >= Val.scale collPerc txfee) $
     InsufficientCollateral
@@ -334,7 +334,7 @@ validateInsufficientCollateral pp txb bal =
 validateCollateralContainsNonADA ::
   Val.Val (Core.Value era) =>
   Core.Value era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateCollateralContainsNonADA bal =
   failureUnless (Val.inject (Val.coin bal) == bal) $ CollateralContainsNonADA bal
 
@@ -347,7 +347,7 @@ validateOutsideForecast ::
   EpochInfo (Either a) ->
   SystemStart ->
   ValidatedTx era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateOutsideForecast ei sysSt tx =
   {-   (_,i_f) := txvldt tx   -}
   case getField @"vldt" (body tx) of
@@ -367,7 +367,7 @@ validateOutputTooSmallUTxO ::
   ) =>
   Core.PParams era ->
   UTxO era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateOutputTooSmallUTxO pp (UTxO outputs) =
   failureUnless (null outputsTooSmall) $ OutputTooSmallUTxO outputsTooSmall
   where
@@ -393,7 +393,7 @@ validateOutputTooBigUTxO ::
   ) =>
   Core.PParams era ->
   UTxO era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateOutputTooBigUTxO pp (UTxO outputs) =
   failureUnless (null outputsTooBig) $ OutputTooBigUTxO outputsTooBig
   where
@@ -413,7 +413,7 @@ validateWrongNetworkInTxBody ::
   HasField "txnetworkid" (Core.TxBody era) (StrictMaybe Network) =>
   Network ->
   Core.TxBody era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateWrongNetworkInTxBody netId txb =
   case getField @"txnetworkid" txb of
     SNothing -> pure ()
@@ -429,7 +429,7 @@ validateExUnitsTooBigUTxO ::
   ) =>
   Core.PParams era ->
   Core.Tx era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateExUnitsTooBigUTxO pp tx =
   failureUnless (pointWiseExUnits (<=) totalExUnits maxTxExUnits) $
     ExUnitsTooBigUTxO maxTxExUnits totalExUnits
@@ -447,7 +447,7 @@ validateTooManyCollateralInputs ::
   ) =>
   Core.PParams era ->
   Core.TxBody era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateTooManyCollateralInputs pp txb =
   failureUnless (numColl <= maxColl) $ TooManyCollateralInputs maxColl numColl
   where

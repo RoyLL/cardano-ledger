@@ -14,6 +14,69 @@
 
 module Cardano.Ledger.Babbage.Rules.Utxo where
 
+import qualified Cardano.Ledger.Core as Core
+import Cardano.Ledger.Era (Era (..), ValidateScript (..))
+-- import qualified Cardano.Ledger.Era as Era
+import Cardano.Ledger.Rules.ValidationMode
+  ( Inject (..),
+  --  runTest,
+  --  runTestOnSignal,
+  )
+import Control.State.Transition.Extended
+  ( -- Embed (..),
+    -- Rule,
+    -- RuleType (Transition),
+    STS (..),
+    -- TRC (..),
+    -- TransitionRule (..),
+    -- judgmentContext,
+    -- liftSTS,
+    -- trans,
+    -- (?!),
+  )
+import Cardano.Ledger.Alonzo.Rules.Utxo(UtxoPredicateFailure (..),vKeyLocked)
+import qualified Cardano.Ledger.Shelley.Rules.Utxo as Shelley
+import qualified Cardano.Ledger.ShelleyMA.Rules.Utxo as ShelleyMA
+  ( UtxoPredicateFailure,
+    -- validateOutsideValidityIntervalUTxO,
+    -- validateTriesToForgeADA,
+    -- validateValueNotConservedUTxO,
+  )
+import Cardano.Ledger.Alonzo.Rules.Utxow (UtxowPredicateFail)
+import Cardano.Ledger.Coin(Coin(..))
+
+import Cardano.Ledger.Rules.ValidationMode
+  ( Inject (..),
+    Test,
+    runTest,
+    runTestOnSignal,
+  )
+import Validation
+import Cardano.Ledger.Alonzo.Tx (ValidatedTx (..), minfee, totExUnits)
+import qualified Cardano.Ledger.Alonzo.Tx as Alonzo (ValidatedTx)
+import Cardano.Ledger.Babbage.TxBody
+  ( TxBody(..),
+    txfee',
+    collateral',
+    totalCollateral' ,
+    collateralReturn' ,
+  )
+import Cardano.Ledger.Shelley.UTxO(UTxO(..))
+import Cardano.Ledger.Alonzo.TxWitness (TxWitness (..), nullRedeemers)
+import GHC.Records(HasField(getField))
+import GHC.Natural(Natural)
+import Cardano.Ledger.Alonzo.Scripts(Prices)
+import qualified Data.Compact.SplitMap as SplitMap
+-- import Control.Monad(unless)
+import Data.Foldable (foldl', sequenceA_)
+import Cardano.Ledger.Babbage.Collateral (collBalance, minCollateral)
+import qualified Cardano.Ledger.Val as Val
+import Data.Maybe.Strict(StrictMaybe(..))
+import qualified Data.Set as Set
+
+-- ================================
+
+{-
 -- import Cardano.Ledger.Babbage.Rules.Utxos (BabbageUTXOS)
 
 -- AlonzoUtxoNeeds,
@@ -51,12 +114,11 @@ import Cardano.Ledger.Alonzo.Rules.Utxo
 -- --------------------------------
 
 import Cardano.Ledger.Alonzo.Rules.Utxos (UTXOS, UtxosPredicateFailure (..))
-import Cardano.Ledger.Alonzo.Rules.Utxow (UtxowPredicateFail)
+
 import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices, pointWiseExUnits)
-import Cardano.Ledger.Alonzo.Tx (ValidatedTx (..), minfee, totExUnits)
-import qualified Cardano.Ledger.Alonzo.Tx as Alonzo (ValidatedTx)
+
 import qualified Cardano.Ledger.Alonzo.TxSeq as Alonzo (TxSeq)
-import Cardano.Ledger.Alonzo.TxWitness (TxWitness (..), nullRedeemers)
+
 import Cardano.Ledger.Babbage.Collateral (collBalance, feesOK, minCollateral)
 import Cardano.Ledger.Babbage.Tx (ValidatedTx (..), txouts, wits)
 import Cardano.Ledger.Babbage.TxBody
@@ -75,7 +137,6 @@ import Cardano.Ledger.BaseTypes
     networkId,
     systemStart,
   )
-import Cardano.Ledger.Coin
 import Cardano.Ledger.CompactAddress
   ( CompactAddr,
     isBootstrapCompactAddr,
@@ -84,17 +145,7 @@ import Cardano.Ledger.CompactAddress
 import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Era (Era (..), ValidateScript (..))
 import qualified Cardano.Ledger.Era as Era
-import Cardano.Ledger.Rules.ValidationMode
-  ( Inject (..),
-    InjectMaybe (..),
-    mapMaybeValidation,
-    runTest,
-    runTestOnSignal,
-    runValidation,
-    runValidationStatic,
-    runValidationStaticTransMaybe,
-    runValidationTransMaybe,
-  )
+
 import Cardano.Ledger.Shelley.Constraints (UsesPParams)
 import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
 import qualified Cardano.Ledger.Shelley.Rules.Utxo as Shelley
@@ -134,9 +185,12 @@ import GHC.Generics (Generic)
 import GHC.Records
 import NoThunks.Class (NoThunks)
 import Numeric.Natural (Natural)
-import Validation
 
+
+-}
 -- ======================================================
+
+data BabbageUTXO era
 
 -- | Predicate failure for the Babbage Era
 data BabbageUtxoPred era
@@ -184,68 +238,66 @@ instance
   where
   inject = FromAlonzoUtxoFail . inject
 
+
 -- =======================================================
 
 -- | feesOK can differ from Era to Era, as new notions of fees arise. This is the Babbage version
 --   See: Figure 2: Functions related to fees and collateral, in the Babbage specification
 --   In the spec feesOK is a boolean function. Because wee need to handle predicate failures
---   in the implementaion, it is coded as a TransitionRule. It will return () if it succeeds,
---   and raise an error (rather than return) if any of the required parts are False.
+--   in the implementaion, it is coded as a Test. Which is a validation.
 --   This version is generic in that it can be lifted to any PredicateFailure type that
 --   embeds BabbageUtxoPred era. This makes it possibly useful in future Eras.
 
-{-
 feesOK ::
   forall era utxo.
-  ( Era era,
-    ValidateScript era, -- isTwoPhaseScriptAddress
+  ( ValidateScript era, -- isTwoPhaseScriptAddress
     Core.Tx era ~ ValidatedTx era,
     Core.Witnesses era ~ TxWitness era,
     Core.TxBody era ~ TxBody era,
-    FeeNeeds era
+    HasField "_minfeeA" (Core.PParams era) Natural,
+    HasField "_minfeeB" (Core.PParams era) Natural,
+    HasField "_prices" (Core.PParams era) Prices,
+    HasField "_collateralPercentage" (Core.PParams era) Natural,
+    Era era
   ) =>
-  (BabbageUtxoPred era -> PredicateFailure (utxo era)) ->
   Core.PParams era ->
   Core.Tx era ->
   UTxO era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
-feesOK lift pp tx (UTxO utxo) = do
+  Test (BabbageUtxoPred era)
+feesOK pp tx (UTxO utxo) = do
   let txb = getField @"body" tx
       theFee = txfee' txb -- Coin supplied to pay fees
       minimumFee = minfee @era pp tx
-      lift2 = lift . FromAlonzoUtxoFail
   -- Part 1  (minfee pp tx ≤ txfee tx )
-  (minimumFee <= theFee) ?! lift2 (FeeTooSmallUTxO minimumFee theFee)
-
-  -- Part 2 (txrdmrs tx /= ◇ ⇒ ... )
-  unless (nullRedeemers . txrdmrs' . wits $ tx) $ do
-    -- Part 3 ((∀(a, , ) ∈ range (collInputs txb ◁ utxo), paymentHK a ∈ Addr^{vkey})
-    let collateral = collateralInputs' txb SplitMap.◁ utxo
-    -- UTxO restricted to the inputs allocated to pay the Fee
-    all vKeyLocked collateral
-      ?! lift2 (ScriptsNotPaidUTxO (UTxO (SplitMap.filter (not . vKeyLocked) collateral)))
-
-    -- Part 4 (balance ≥ minCollateral tx pp)
-    let valbalance = collBalance txb (UTxO utxo)
-        balance = coin valbalance
-    balance >= minCollateral txb pp ?! lift2 (InsufficientCollateral balance (minCollateral txb pp))
-
-    -- Part 5 (adaOnly balance)
-    adaOnly valbalance ?! lift2 (CollateralContainsNonADA valbalance)
-
-    -- Part 6 ((txcoll tx 6 = 3) ⇒ balance = txcoll tx)
-    case collateralReturn' txb of
-      SNothing -> pure ()
-      SJust _txout -> balance == total ?! lift (UnequalCollateralReturn balance total)
-        where
-          total = totalCollateral' txb
-
-    -- Part 7 (collInputs tx 6 = ∅)
-    not (Set.null (collateralInputs' txb)) ?! lift2 NoCollateralInputs
-
-    pure ()
-
--}
+  sequenceA_
+   [ failureUnless (minimumFee <= theFee) (inject (FeeTooSmallUTxO @era minimumFee theFee))
+   , -- Part 2 (txrdmrs tx /= ◇ ⇒ ... )
+     if (nullRedeemers . txrdmrs' . wits $ tx) then pure () else 
+        sequenceA_
+          [ -- Part 3 ((∀(a, , ) ∈ range (collInputs txb ◁ utxo), paymentHK a ∈ Addr^{vkey})
+            let collateral = collateral' txb SplitMap.◁ utxo
+                -- UTxO restricted to the inputs allocated to pay the Fee
+            in failureUnless (all vKeyLocked collateral)
+                             (inject (ScriptsNotPaidUTxO (UTxO (SplitMap.filter (not . vKeyLocked) collateral))))
+          , -- Part 4 (balance ≥ minCollateral tx pp)
+            let valbalance = collBalance txb (UTxO utxo)
+                balance = Val.coin valbalance
+            in sequenceA_
+                [ failureUnless
+                     (balance >= minCollateral txb pp)
+                     (inject (InsufficientCollateral @era balance (minCollateral txb pp)))
+                , -- Part 5 (adaOnly balance)
+                  failureUnless (Val.adaOnly valbalance) (inject (CollateralContainsNonADA @era valbalance))
+                , -- Part 6 ((txcoll tx 6 = 3) ⇒ balance = txcoll tx)
+                  case collateralReturn' txb of
+                    SNothing -> pure ()
+                    SJust _txout -> failureUnless (balance == total) (inject (UnequalCollateralReturn @era balance total))
+                      where total = totalCollateral' txb
+                , -- Part 7 (collInputs tx 6 = ∅)
+                  failureUnless (not (Set.null (collateral' txb))) (inject (NoCollateralInputs @era))
+                ]
+        
+          ]]
 
 -- ========================================================
 
@@ -367,5 +419,3 @@ utxoTransition = do
   trans @(Core.EraRule "UTXOS" era) =<< coerce <$> judgmentContext
 
 -}
-whoops :: Bool -> Validation (NonEmpty (UtxoPredicateFailure era)) ()
-whoops x = undefined

@@ -30,6 +30,7 @@ module Cardano.Ledger.Rules.ValidationMode
     -- * Interface for independent Tests
     Inject (..),
     InjectMaybe (..),
+    Test,
     runTest,
     runTestMaybe,
     runTestOnSignal,
@@ -174,11 +175,14 @@ class Inject t s where
 class InjectMaybe t s where
   injectMaybe :: t -> Maybe s
 
-runTest :: Inject t (PredicateFailure sts) => Validation (NonEmpty t) () -> Rule sts ctx ()
+
+type Test failure =  Validation (NonEmpty failure) ()
+
+runTest :: Inject t (PredicateFailure sts) => Test t -> Rule sts ctx ()
 runTest x = runValidationTrans inject x
 
-runTestOnSignal :: Inject t (PredicateFailure sts) => Validation (NonEmpty t) () -> Rule sts ctx ()
+runTestOnSignal :: Inject t (PredicateFailure sts) => Test t -> Rule sts ctx ()
 runTestOnSignal x = runValidationStaticTrans inject x
 
-runTestMaybe :: InjectMaybe t (PredicateFailure sts) => Validation (NonEmpty t) () -> Rule sts ctx ()
+runTestMaybe :: InjectMaybe t (PredicateFailure sts) => Test t -> Rule sts ctx ()
 runTestMaybe x = runValidationTransMaybe injectMaybe x

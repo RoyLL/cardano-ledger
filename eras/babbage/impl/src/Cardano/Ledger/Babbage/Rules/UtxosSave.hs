@@ -17,10 +17,13 @@ where
 import Cardano.Ledger.Alonzo.Language (Language)
 import Cardano.Ledger.Alonzo.Rules.Utxos
   ( UTXOS,
-    UtxosDelta (UtxosDelta),
     UtxosEvent (..),
     UtxosPredicateFailure (..),
-    genericUtxosTransition,
+    constructValidated,
+    validBegin,
+    validEnd,
+    invalidBegin,
+    invalidEnd,
   )
 import Cardano.Ledger.Alonzo.Scripts (Script)
 import Cardano.Ledger.Alonzo.Tx (CostModel, DataHash)
@@ -52,8 +55,10 @@ import Data.Set (Set)
 import GHC.Records (HasField (getField))
 
 -- ====================================================
--- Specialize Utxos to Babbage
 
+-- ====================================================
+-- Specialize Utxos to Babbage
+{-
 babbageUtxosDelta ::
   ( Era era,
     Core.TxBody era ~ TxBody era
@@ -68,9 +73,10 @@ babbageUtxosDelta = UtxosDelta collBalFee id
             (unUTxO utxo)
             (getField @"collateral" txb)
         !coin_ = Val.coin (collBalance txb (UTxO utxoDel))
-
+-}
 -- =======================================
 
+{-
 -- | The uninhabited type that marks the Babbage UTXOS rule
 data BabbageUTXOS era
 
@@ -124,3 +130,5 @@ instance
   where
   wrapFailed = UpdateFailure
   wrapEvent = UpdateEvent
+
+-}

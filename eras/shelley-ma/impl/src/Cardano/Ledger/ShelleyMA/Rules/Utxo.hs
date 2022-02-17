@@ -28,6 +28,7 @@ import Cardano.Ledger.Keys (KeyHash, KeyRole (..))
 import Cardano.Ledger.Rules.ValidationMode
   ( Inject (..),
     InjectMaybe (..),
+    Test,
     runTest,
   )
 import Cardano.Ledger.Shelley.Constraints
@@ -65,7 +66,6 @@ import Data.Coders
 import qualified Data.Compact.SplitMap as SplitMap
 import Data.Foldable (toList)
 import Data.Int (Int64)
-import Data.List.NonEmpty (NonEmpty)
 import qualified Data.Map.Strict as Map
 import Data.Sequence.Strict (StrictSeq)
 import Data.Set (Set)
@@ -289,7 +289,7 @@ validateOutsideValidityIntervalUTxO ::
   HasField "vldt" (Core.TxBody era) ValidityInterval =>
   SlotNo ->
   Core.TxBody era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateOutsideValidityIntervalUTxO slot txb =
   failureUnless (inInterval slot (txvldt txb)) $
     OutsideValidityIntervalUTxO (txvldt txb) slot
@@ -303,7 +303,7 @@ validateOutsideValidityIntervalUTxO slot txb =
 validateTriesToForgeADA ::
   (Val.Val (Core.Value era), HasField "mint" (Core.TxBody era) (Core.Value era)) =>
   Core.TxBody era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateTriesToForgeADA txb =
   failureUnless (Val.coin (getField @"mint" txb) == Val.zero) TriesToForgeADA
 
@@ -315,7 +315,7 @@ validateOutputTooBigUTxO ::
     ToCBOR (Core.Value era)
   ) =>
   UTxO era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateOutputTooBigUTxO (UTxO outputs) =
   failureUnless (null outputsTooBig) $ OutputTooBigUTxO outputsTooBig
   where
@@ -338,7 +338,7 @@ validateOutputTooSmallUTxO ::
   ) =>
   Core.PParams era ->
   UTxO era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateOutputTooSmallUTxO pp (UTxO outputs) =
   failureUnless (null outputsTooSmall) $ OutputTooSmallUTxO outputsTooSmall
   where
@@ -368,7 +368,7 @@ validateValueNotConservedUTxO ::
   UTxO era ->
   Map.Map (KeyHash 'StakePool (Crypto era)) a ->
   Core.TxBody era ->
-  Validation (NonEmpty (UtxoPredicateFailure era)) ()
+  Test (UtxoPredicateFailure era)
 validateValueNotConservedUTxO pp utxo stakepools txb =
   failureUnless (consumedValue == producedValue) $
     ValueNotConservedUTxO consumedValue producedValue

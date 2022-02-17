@@ -28,6 +28,7 @@ module Cardano.Ledger.Shelley.Rules.Utxow
     validateVerifiedWits,
     validateMetadata,
     validateMIRInsufficientGenesisSigs,
+    validateNeededWitnesses,
   )
 where
 
@@ -66,6 +67,7 @@ import Cardano.Ledger.Keys
   )
 import Cardano.Ledger.Rules.ValidationMode
   ( Inject (..),
+    Test,
     runTest,
     runTestOnSignal,
   )
@@ -134,7 +136,6 @@ import Control.State.Transition
     wrapFailed,
   )
 import Data.Foldable (sequenceA_)
-import Data.List.NonEmpty (NonEmpty)
 import qualified Data.Map.Strict as Map
 import qualified Data.Sequence as Seq (filter)
 import Data.Sequence.Strict (StrictSeq)
@@ -347,7 +348,7 @@ transitionRulesUTXOW = do
   runTestOnSignal $ validateVerifiedWits tx
 
   {-  witsVKeyNeeded utxo tx genDelegs ⊆ witsKeyHashes                   -}
-  runTest $ validateNeededWitnesses genDelegs utxo tx witsKeyHashes
+  runTest $ validateNeededWitnesses witsVKeyNeeded genDelegs utxo tx witsKeyHashes
 
   -- check metadata hash
   {-  ((adh = ◇) ∧ (ad= ◇)) ∨ (adh = hashAD ad)                          -}
@@ -402,7 +403,7 @@ validateFailedScripts ::
   forall era.
   ValidateScript era =>
   Core.Tx era ->
-  Validation (NonEmpty (UtxowPredicateFailure era)) ()
+  Test (UtxowPredicateFailure era)
 validateFailedScripts tx = do
   let failedScripts =
         Map.filterWithKey
@@ -425,7 +426,7 @@ validateMissingScripts ::
   Core.PParams era ->
   UTxO era ->
   Core.Tx era ->
-  Validation (NonEmpty (UtxowPredicateFailure era)) ()
+  Test (UtxowPredicateFailure era)
 validateMissingScripts pp utxo tx =
   let sNeeded = scriptsNeeded utxo tx
       sReceived = Map.keysSet (getField @"scriptWits" tx)
@@ -451,7 +452,7 @@ validateVerifiedWits ::
     DSignable (Crypto era) (Hash (Crypto era) EraIndependentTxBody)
   ) =>
   Core.Tx era ->
-  Validation (NonEmpty (UtxowPredicateFailure era)) ()
+  Test (UtxowPredicateFailure era)
 validateVerifiedWits tx =
   case failed <> failedBootstrap of
     [] -> pure ()
@@ -470,6 +471,7 @@ validateVerifiedWits tx =
           (not . verifyBootstrapWit (extractHash (hashAnnotated @(Crypto era) txbody)))
           (Set.toList $ getField @"bootWits" tx)
 
+{-
 validateNeededWitnesses ::
   ( Era era,
     HasField "wdrls" (Core.TxBody era) (Wdrl (Crypto era)),
@@ -481,12 +483,30 @@ validateNeededWitnesses ::
   UTxO era ->
   Core.Tx era ->
   WitHashes (Crypto era) ->
-  Validation (NonEmpty (UtxowPredicateFailure era)) ()
+  Test (UtxowPredicateFailure era)
 validateNeededWitnesses genDelegs utxo tx witsKeyHashes =
   let needed = witsVKeyNeeded utxo tx genDelegs
       missingWitnesses = diffWitHashes needed witsKeyHashes
    in failureUnless (nullWitHashes missingWitnesses) $
         MissingVKeyWitnessesUTXOW missingWitnesses
+-}
+
+-- How to compute the set of witnessed needed (witsvkeyneeded) varies
+-- from Era to Era, so we parameterise over that function in this test.
+-- That allows it to be used in many Eras.
+validateNeededWitnesses ::
+  (UTxO era -> Core.Tx era -> GenDelegs (Crypto era) -> WitHashes (Crypto era)) ->
+  GenDelegs (Crypto era) ->
+  UTxO era ->
+  Core.Tx era ->
+  WitHashes (Crypto era) ->
+  Test (UtxowPredicateFailure era)
+validateNeededWitnesses  witsvkeyneeded genDelegs utxo tx witsKeyHashes =
+  let needed = witsvkeyneeded utxo tx genDelegs
+      missingWitnesses = diffWitHashes needed witsKeyHashes
+   in failureUnless (nullWitHashes missingWitnesses) $
+        MissingVKeyWitnessesUTXOW missingWitnesses
+
 
 -- | Collect the set of hashes of keys that needs to sign a
 --  given transaction. This set consists of the txin owners,
@@ -569,7 +589,7 @@ validateMetadata ::
   ) =>
   Core.PParams era ->
   Core.Tx era ->
-  Validation (NonEmpty (UtxowPredicateFailure era)) ()
+  Test (UtxowPredicateFailure era)
 validateMetadata pp tx =
   let txbody = getField @"body" tx
    in case (getField @"adHash" txbody, getField @"auxiliaryData" tx) of
@@ -598,7 +618,7 @@ validateMIRInsufficientGenesisSigs ::
   Word64 ->
   WitHashes (Crypto era) ->
   Core.Tx era ->
-  Validation (NonEmpty (UtxowPredicateFailure era)) ()
+  Test (UtxowPredicateFailure era)
 validateMIRInsufficientGenesisSigs (GenDelegs genMapping) coreNodeQuorum witsKeyHashes tx =
   let genDelegates =
         Set.fromList $ asWitness . genDelegKeyHash <$> Map.elems genMapping
