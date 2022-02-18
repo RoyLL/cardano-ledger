@@ -114,7 +114,7 @@ instance CC.Crypto c => Parametric (AlonzoEra c) where
   makeChange x (KeyDeposit n) = x {_keyDeposit = n}
 
   obligation' = obligation @c @(PParams (AlonzoEra c)) @(ViewMap c)
-  minfee' = minfee @(AlonzoEra c) @(ValidatedTx)
+  minfee' = minfee @(AlonzoEra c)
   hashScriptIntegrity' = hashScriptIntegrity
 
 -- ================================================================
@@ -143,7 +143,7 @@ instance CC.Crypto c => Parametric (BabbageEra c) where
   makeChange x (KeyDeposit n) = x {Babbage._keyDeposit = n}
 
   obligation' = obligation @c @(Babbage.PParams (BabbageEra c)) @(ViewMap c)
-  minfee' = minfee @(BabbageEra c) @(ValidatedTx)
+  minfee' = minfee @(BabbageEra c)
   hashScriptIntegrity' = hashScriptIntegrity
 
 -- ================================================================
