@@ -19,6 +19,7 @@ import Cardano.Ledger.Alonzo.Data (DataHash)
 import Cardano.Ledger.Alonzo.Language (Language (..))
 import Cardano.Ledger.Alonzo.PlutusScriptApi (language, scriptsNeeded)
 import Cardano.Ledger.Alonzo.Rules.Utxo (AlonzoUTXO)
+import Cardano.Ledger.Alonzo.Rules.Utxos(ConcreteAlonzo)
 import qualified Cardano.Ledger.Alonzo.Rules.Utxo as Alonzo (UtxoEvent, UtxoPredicateFailure)
 import Cardano.Ledger.Alonzo.Scripts (CostModel, Script (..))
 import Cardano.Ledger.Alonzo.Tx
@@ -60,10 +61,10 @@ import Cardano.Ledger.Shelley.LedgerState
     witsFromTxWitnesses,
   )
 import Cardano.Ledger.Shelley.PParams (Update)
+import Cardano.Ledger.Alonzo.PParams(PParams'(..))
 import Cardano.Ledger.Shelley.Rules.Utxo (UtxoEnv (..))
 import Cardano.Ledger.Shelley.Rules.Utxow
-  ( ShelleyStyleWitnessNeeds,
-    UtxowEvent (UtxoEvent),
+  ( UtxowEvent (UtxoEvent),
     UtxowPredicateFailure (..),
     validateNeededWitnesses,
   )
@@ -95,6 +96,13 @@ import NoThunks.Class
 import Validation
 import Cardano.Ledger.SafeHash(SafeHash)
 import Cardano.Ledger.Hashes(EraIndependentData)
+import Cardano.Ledger.AuxiliaryData(ValidateAuxiliaryData)
+
+import Cardano.Crypto.DSIGN.Class(Signable)
+import Cardano.Ledger.Crypto(DSIGN,HASH)
+import Cardano.Crypto.Hash.Class(Hash)
+import Cardano.Ledger.Hashes(EraIndependentTxBody)
+
 
 -- =================================================
 
@@ -317,58 +325,27 @@ ppViewHashesMatch tx txbody pp = do
 
 
 -- ==============================================================
--- Here we define the transtion function, using reusable tests
+-- Here we define the transtion function, using reusable tests.
+-- The tests are very generic and resusabe, but the transition
+-- function is very specific to the Alonzo Era.
 
-{- Defined in the Shelley Utxow rule.
-type ShelleyStyleWitnessNeeds era =
-  ( HasField "certs" (Core.TxBody era) (StrictSeq (DCert (Crypto era))),
-    HasField "inputs" (Core.TxBody era) (Set (TxIn (Crypto era))),
-    HasField "wdrls" (Core.TxBody era) (Wdrl (Crypto era)),
-    HasField "addrWits" (Core.Tx era) (Set (WitVKey 'Witness (Crypto era))),
-    HasField "update" (Core.TxBody era) (StrictMaybe (Update era)),
-    HasField "_protocolVersion" (Core.PParams era) ProtVer,
-    ValidateAuxiliaryData era (Crypto era),
-    ValidateScript era,
-    DSignable (Crypto era) (Hash (Crypto era) EraIndependentTxBody)
-  )
--}
-
--- | Constraints to make an Alonzo Utxow STS instance
---   (in addition to ShelleyStyleWitnessNeeds)
-type AlonzoStyleAdditions era =
-  ( HasField "datahash" (Core.TxOut era) (StrictMaybe (DataHash (Crypto era))), 
-    HasField "scriptIntegrityHash" (Core.TxBody era) (StrictMaybe (ScriptIntegrityHash (Crypto era))),
-    -- New transaction body fields needed for Alonzo
-    HasField "reqSignerHashes" (Core.TxBody era) (Set (KeyHash 'Witness (Crypto era))),
-    HasField "collateral" (Core.TxBody era) (Set (TxIn (Crypto era)))
-  )
-
--- | A somewhat generic STS transitionRule function for the Alonzo Era.
+-- | A very specialized transitionRule function for the Alonzo Era.
 alonzoStyleWitness ::
-  forall era utxow.
-  ( Era era,
+  forall era.
+  ( ValidateScript era,
+    ValidateAuxiliaryData era (Crypto era),
     -- Fix some Core types to the Alonzo Era
-    Core.Tx era ~ ValidatedTx era, -- scriptsNeeded, checkScriptData etc. are fixed at Alonzo.Tx
-    Core.Script era ~ Script era,
+    ConcreteAlonzo era, 
+    Core.Tx era ~ ValidatedTx era,
+    Core.Witnesses era ~ TxWitness era,
+    Signable (DSIGN (Crypto era)) (Hash (HASH (Crypto era)) EraIndependentTxBody),
     -- Allow UTXOW to call UTXO
-    Embed (Core.EraRule "UTXO" era) (utxow era),
+    Embed (Core.EraRule "UTXO" era) ( AlonzoUTXOW era),
     Environment (Core.EraRule "UTXO" era) ~ UtxoEnv era,
     State (Core.EraRule "UTXO" era) ~ UTxOState era,
-    Signal (Core.EraRule "UTXO" era) ~ ValidatedTx era,
-    -- Asumptions needed since we are going to fix utxow when we use this in an STS Era
-    BaseM (utxow era) ~ ShelleyBase,
-    Environment (utxow era) ~ UtxoEnv era,
-    State (utxow era) ~ UTxOState era,
-    Signal (utxow era) ~ ValidatedTx era,
-    PredicateFailure (utxow era) ~ UtxowPredicateFail era,
-    STS (utxow era),
-    -- Supply the HasField and Validate instances for Alonzo
-    ShelleyStyleWitnessNeeds era,
-    AlonzoStyleAdditions era,
-    --
-    (HasField "_costmdls" (Core.PParams era) (Map.Map Language CostModel))
+    Signal (Core.EraRule "UTXO" era) ~ ValidatedTx era
   ) =>
-  TransitionRule (utxow era)
+  TransitionRule ( AlonzoUTXOW era)
 alonzoStyleWitness = do
   (TRC (UtxoEnv slot pp stakepools genDelegs, u, tx)) <- judgmentContext
 
@@ -526,19 +503,18 @@ data AlonzoUTXOW era
 
 instance
   forall era.
-  ( -- Fix some Core types to the Alonzo Era
+  ( ValidateScript era,
+    ValidateAuxiliaryData era (Crypto era),
+    Signable (DSIGN (Crypto era)) (Hash (HASH (Crypto era)) EraIndependentTxBody),
+    -- Fix some Core types to the Alonzo Era
     Core.Tx era ~ ValidatedTx era,
-    Core.Script era ~ Script era,
+    Core.Witnesses era ~ TxWitness era,
+    ConcreteAlonzo era,
     -- Allow UTXOW to call UTXO
     Embed (Core.EraRule "UTXO" era) (AlonzoUTXOW era),
     Environment (Core.EraRule "UTXO" era) ~ UtxoEnv era,
     State (Core.EraRule "UTXO" era) ~ UTxOState era,
-    Signal (Core.EraRule "UTXO" era) ~ ValidatedTx era,
-    -- Supply the HasField and Validate instances for Alonzo
-    ShelleyStyleWitnessNeeds era, -- supplies a subset of those needed. All the old Shelley Needs still apply.
-    Show (Core.TxOut era),
-    (HasField "_costmdls" (Core.PParams era) (Map.Map Language CostModel)),
-    AlonzoStyleAdditions era
+    Signal (Core.EraRule "UTXO" era) ~ ValidatedTx era
   ) =>
   STS (AlonzoUTXOW era)
   where
