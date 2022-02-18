@@ -17,30 +17,45 @@ module Cardano.Ledger.Babbage.Rules.Utxo where
 import qualified Cardano.Ledger.Core as Core
 import Cardano.Ledger.Era (Era (..), ValidateScript (..))
 -- import qualified Cardano.Ledger.Era as Era
-import Cardano.Ledger.Rules.ValidationMode
-  ( Inject (..),
-  --  runTest,
-  --  runTestOnSignal,
-  )
+import Control.Monad.Trans.Reader (asks)
 import Control.State.Transition.Extended
-  ( -- Embed (..),
+  ( Embed (..),
     -- Rule,
     -- RuleType (Transition),
     STS (..),
-    -- TRC (..),
-    -- TransitionRule (..),
-    -- judgmentContext,
-    -- liftSTS,
-    -- trans,
+    TRC (..),
+    TransitionRule (..),
+    judgmentContext,
+    liftSTS,
+    trans,
     -- (?!),
   )
-import Cardano.Ledger.Alonzo.Rules.Utxo(UtxoPredicateFailure (..),vKeyLocked)
+import Cardano.Ledger.Alonzo.Rules.Utxo
+  ( -- AlonzoUTXO,
+    UtxoEvent (..),
+    UtxoPredicateFailure (..),
+    -- fromShelleyFailure,
+    -- fromShelleyMAFailure,
+    vKeyLocked,
+    validateCollateral,
+    validateCollateralContainsNonADA,
+    validateExUnitsTooBigUTxO,
+    validateInsufficientCollateral,
+    validateOutputTooBigUTxO,
+    validateOutputTooSmallUTxO,
+    validateOutsideForecast,
+    validateScriptsNotPaidUTxO,
+    validateTooManyCollateralInputs,
+    validateWrongNetworkInTxBody,
+  )
+import Cardano.Ledger.Alonzo.Rules.Utxos(UtxosPredicateFailure (..))
+import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
 import qualified Cardano.Ledger.Shelley.Rules.Utxo as Shelley
 import qualified Cardano.Ledger.ShelleyMA.Rules.Utxo as ShelleyMA
   ( UtxoPredicateFailure,
-    -- validateOutsideValidityIntervalUTxO,
-    -- validateTriesToForgeADA,
-    -- validateValueNotConservedUTxO,
+    validateOutsideValidityIntervalUTxO,
+    validateTriesToForgeADA,
+    validateValueNotConservedUTxO,
   )
 import Cardano.Ledger.Alonzo.Rules.Utxow (UtxowPredicateFail)
 import Cardano.Ledger.Coin(Coin(..))
@@ -52,8 +67,8 @@ import Cardano.Ledger.Rules.ValidationMode
     runTestOnSignal,
   )
 import Validation
-import Cardano.Ledger.Alonzo.Tx (ValidatedTx (..), minfee, totExUnits)
-import qualified Cardano.Ledger.Alonzo.Tx as Alonzo (ValidatedTx)
+import Cardano.Ledger.Alonzo.Tx (ValidatedTx (..), minfee, txouts) -- , totExUnits)
+-- import qualified Cardano.Ledger.Alonzo.Tx as Alonzo (ValidatedTx)
 import Cardano.Ledger.Babbage.TxBody
   ( TxBody(..),
     txfee',
@@ -68,67 +83,12 @@ import GHC.Natural(Natural)
 import Cardano.Ledger.Alonzo.Scripts(Prices)
 import qualified Data.Compact.SplitMap as SplitMap
 -- import Control.Monad(unless)
-import Data.Foldable (foldl', sequenceA_)
+import Data.Foldable (sequenceA_)
 import Cardano.Ledger.Babbage.Collateral (collBalance, minCollateral)
 import qualified Cardano.Ledger.Val as Val
+import Data.Coerce (coerce)
 import Data.Maybe.Strict(StrictMaybe(..))
 import qualified Data.Set as Set
-
--- ================================
-
-{-
--- import Cardano.Ledger.Babbage.Rules.Utxos (BabbageUTXOS)
-
--- AlonzoUtxoNeeds,
--- FeeNeeds,
--- UtxoDelta (UtxoDelta),
-
--- genericAlonzoUtxo,
-
-import Cardano.Binary (FromCBOR (..), ToCBOR (..), serialize)
-import Cardano.Ledger.Address
-  ( Addr (..),
-    RewardAcnt,
-    getNetwork,
-    getRwdNetwork,
-  )
-import Cardano.Ledger.Alonzo.Data (DataHash, dataHashSize)
-import Cardano.Ledger.Alonzo.Rules.Utxo
-  ( AlonzoUTXO,
-    UtxoEvent (..),
-    UtxoPredicateFailure (..),
-    fromShelleyFailure,
-    fromShelleyMAFailure,
-    vKeyLocked,
-    validateCollateral,
-    validateCollateralContainsNonADA,
-    validateExUnitsTooBigUTxO,
-    validateInsufficientCollateral,
-    validateOutputTooBigUTxO,
-    validateOutputTooSmallUTxO,
-    validateOutsideForecast,
-    validateScriptsNotPaidUTxO,
-    validateTooManyCollateralInputs,
-    validateWrongNetworkInTxBody,
-  )
--- --------------------------------
-
-import Cardano.Ledger.Alonzo.Rules.Utxos (UTXOS, UtxosPredicateFailure (..))
-
-import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices, pointWiseExUnits)
-
-import qualified Cardano.Ledger.Alonzo.TxSeq as Alonzo (TxSeq)
-
-import Cardano.Ledger.Babbage.Collateral (collBalance, feesOK, minCollateral)
-import Cardano.Ledger.Babbage.Tx (ValidatedTx (..), txouts, wits)
-import Cardano.Ledger.Babbage.TxBody
-  ( TxBody (..),
-    TxOut,
-    collateral',
-    collateralReturn',
-    totalCollateral',
-    txfee',
-  )
 import Cardano.Ledger.BaseTypes
   ( Network,
     ShelleyBase,
@@ -137,57 +97,9 @@ import Cardano.Ledger.BaseTypes
     networkId,
     systemStart,
   )
-import Cardano.Ledger.CompactAddress
-  ( CompactAddr,
-    isBootstrapCompactAddr,
-    isPayCredScriptCompactAddr,
-  )
-import qualified Cardano.Ledger.Core as Core
-import Cardano.Ledger.Era (Era (..), ValidateScript (..))
-import qualified Cardano.Ledger.Era as Era
 
-import Cardano.Ledger.Shelley.Constraints (UsesPParams)
-import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
-import qualified Cardano.Ledger.Shelley.Rules.Utxo as Shelley
-import Cardano.Ledger.Shelley.Tx (TxIn)
-import Cardano.Ledger.Shelley.TxBody (DCert, Wdrl, unWdrl)
-import qualified Cardano.Ledger.ShelleyMA.Rules.Utxo as ShelleyMA
-  ( UtxoPredicateFailure,
-    validateOutsideValidityIntervalUTxO,
-    validateTriesToForgeADA,
-    validateValueNotConservedUTxO,
-  )
-import Cardano.Ledger.ShelleyMA.Timelocks (ValidityInterval (..), inInterval)
-import Control.Monad.Trans.Reader (asks)
-import Control.State.Transition.Extended
-  ( Embed (..),
-    Rule,
-    RuleType (Transition),
-    STS (..),
-    TRC (..),
-    TransitionRule (..),
-    judgmentContext,
-    liftSTS,
-    trans,
-    (?!),
-  )
-import Data.Coerce (coerce)
-import qualified Data.Compact.SplitMap as SplitMap
-import Data.Either (isRight)
-import Data.Foldable (foldl', sequenceA_)
-import Data.List.NonEmpty (NonEmpty)
-import Data.Ratio ((%))
-import Data.Sequence.Strict (StrictSeq)
-import Data.Set (Set)
-import qualified Data.Set as Set
-import Data.Typeable (Typeable)
-import GHC.Generics (Generic)
-import GHC.Records
-import NoThunks.Class (NoThunks)
-import Numeric.Natural (Natural)
-
-
--}
+import Cardano.Ledger.Babbage.Rules.Utxos (BabbageUTXOS,ConcreteBabbage)
+import Cardano.Ledger.Babbage.PParams(PParams'(..))
 -- ======================================================
 
 data BabbageUTXO era
@@ -249,7 +161,7 @@ instance
 --   embeds BabbageUtxoPred era. This makes it possibly useful in future Eras.
 
 feesOK ::
-  forall era utxo.
+  forall era.
   ( ValidateScript era, -- isTwoPhaseScriptAddress
     Core.Tx era ~ ValidatedTx era,
     Core.Witnesses era ~ TxWitness era,
@@ -257,8 +169,7 @@ feesOK ::
     HasField "_minfeeA" (Core.PParams era) Natural,
     HasField "_minfeeB" (Core.PParams era) Natural,
     HasField "_prices" (Core.PParams era) Prices,
-    HasField "_collateralPercentage" (Core.PParams era) Natural,
-    Era era
+    HasField "_collateralPercentage" (Core.PParams era) Natural
   ) =>
   Core.PParams era ->
   Core.Tx era ->
@@ -273,17 +184,16 @@ feesOK pp tx (UTxO utxo) = do
    [ failureUnless (minimumFee <= theFee) (inject (FeeTooSmallUTxO @era minimumFee theFee))
    , -- Part 2 (txrdmrs tx /= ◇ ⇒ ... )
      if (nullRedeemers . txrdmrs' . wits $ tx) then pure () else 
-        sequenceA_
-          [ -- Part 3 ((∀(a, , ) ∈ range (collInputs txb ◁ utxo), paymentHK a ∈ Addr^{vkey})
-            let collateral = collateral' txb SplitMap.◁ utxo
-                -- UTxO restricted to the inputs allocated to pay the Fee
-            in failureUnless (all vKeyLocked collateral)
-                             (inject (ScriptsNotPaidUTxO (UTxO (SplitMap.filter (not . vKeyLocked) collateral))))
-          , -- Part 4 (balance ≥ minCollateral tx pp)
             let valbalance = collBalance txb (UTxO utxo)
                 balance = Val.coin valbalance
-            in sequenceA_
-                [ failureUnless
+                collat = collateral' txb SplitMap.◁ utxo
+                -- collat is the UTxO restricted to the inputs allocated to pay the Fee
+             in sequenceA_
+                [ -- Part 3 ((∀(a, , ) ∈ range (collInputs txb ◁ utxo), paymentHK a ∈ Addr^{vkey})
+                  failureUnless (all vKeyLocked collat)
+                                (inject (ScriptsNotPaidUTxO (UTxO (SplitMap.filter (not . vKeyLocked) collat))))
+                , -- Part 4 (balance ≥ minCollateral tx pp)
+                  failureUnless
                      (balance >= minCollateral txb pp)
                      (inject (InsufficientCollateral @era balance (minCollateral txb pp)))
                 , -- Part 5 (adaOnly balance)
@@ -296,55 +206,33 @@ feesOK pp tx (UTxO utxo) = do
                 , -- Part 7 (collInputs tx 6 = ∅)
                   failureUnless (not (Set.null (collateral' txb))) (inject (NoCollateralInputs @era))
                 ]
-        
-          ]]
+     ]
 
 -- ========================================================
 
-{-
-
--- TODO FIXME  add CBOR instances
-
--- | The UTxO transition rule for the Alonzo eras.
+-- | The UTxO transition rule for the Babbage eras.
 utxoTransition ::
   forall era.
   ( Era era,
     ValidateScript era,
-    -- instructions for calling UTXOS from AlonzoUTXO
-    Embed (Core.EraRule "UTXOS" era) (AlonzoUTXO era),
+    ConcreteBabbage era, -- Unlike the Tests, we are only going to use this once, so we fix the Core.XX types
+    Core.Tx era ~ ValidatedTx era,
+    Core.Witnesses era ~ TxWitness era,
+    -- We will use this function int the STS instance for (BabbageUTXO era)
+    STS (BabbageUTXO era),
+    Environment (BabbageUTXO era) ~ Shelley.UtxoEnv era,
+    State (BabbageUTXO era) ~ Shelley.UTxOState era,
+    Signal (BabbageUTXO era) ~ ValidatedTx era,
+    BaseM (BabbageUTXO era) ~ ShelleyBase,
+    PredicateFailure (BabbageUTXO era) ~ BabbageUtxoPred era,
+    -- instructions for calling UTXOS from BabbageUTXO
+    Embed (Core.EraRule "UTXOS" era) (BabbageUTXO era),
     Environment (Core.EraRule "UTXOS" era) ~ Shelley.UtxoEnv era,
     State (Core.EraRule "UTXOS" era) ~ Shelley.UTxOState era,
     Signal (Core.EraRule "UTXOS" era) ~ Core.Tx era,
-    -- We leave Core.PParams abstract
-    UsesPParams era,
-    Core.ChainData (Core.Value era),
-    Core.ChainData (Core.TxOut era),
-    Core.ChainData (Core.TxBody era),
-    HasField "_minfeeA" (Core.PParams era) Natural,
-    HasField "_minfeeB" (Core.PParams era) Natural,
-    HasField "_keyDeposit" (Core.PParams era) Coin,
-    HasField "_poolDeposit" (Core.PParams era) Coin,
-    HasField "_maxTxSize" (Core.PParams era) Natural,
-    HasField "_prices" (Core.PParams era) Prices,
-    HasField "_maxTxExUnits" (Core.PParams era) ExUnits,
-    HasField "_coinsPerUTxOWord" (Core.PParams era) Coin,
-    HasField "_maxValSize" (Core.PParams era) Natural,
-    HasField "_collateralPercentage" (Core.PParams era) Natural,
-    HasField "_maxCollateralInputs" (Core.PParams era) Natural,
-    Core.Tx era ~ Alonzo.ValidatedTx era,
-    Core.Witnesses era ~ TxWitness era,
-    Era.TxSeq era ~ Alonzo.TxSeq era,
-    HasField "vldt" (Core.TxBody era) ValidityInterval,
-    HasField "inputs" (Core.TxBody era) (Set (TxIn (Crypto era))),
-    HasField "collateral" (Core.TxBody era) (Set (TxIn (Crypto era))),
-    HasField "mint" (Core.TxBody era) (Core.Value era),
-    HasField "wdrls" (Core.TxBody era) (Wdrl (Crypto era)),
-    HasField "certs" (Core.TxBody era) (StrictSeq (DCert (Crypto era))),
-    HasField "datahash" (Core.TxOut era) (StrictMaybe (DataHash (Crypto era))),
-    ToCBOR (Core.Value era),
-    HasField "txnetworkid" (Core.TxBody era) (StrictMaybe Network)
+    Inject (PredicateFailure (Core.EraRule "PPUP" era)) (PredicateFailure (Core.EraRule "UTXOS" era))
   ) =>
-  TransitionRule (AlonzoUTXO era)
+  TransitionRule (BabbageUTXO era)
 utxoTransition = do
   TRC (Shelley.UtxoEnv slot pp stakepools _genDelegs, u, tx) <- judgmentContext
   let Shelley.UTxOState utxo _deposits _fees _ppup _ = u
@@ -357,65 +245,108 @@ utxoTransition = do
           (getField @"collateral" txb)
 
   {- ininterval slot (txvld txb) -}
-  runValidationTransMaybe fromShelleyMAFailure $
+  runTest $
     ShelleyMA.validateOutsideValidityIntervalUTxO slot txb
 
   sysSt <- liftSTS $ asks systemStart
   ei <- liftSTS $ asks epochInfoWithErr
 
   {- epochInfoSlotToUTCTime epochInfo systemTime i_f ≠ ◇ -}
-  runValidation $ validateOutsideForecast ei sysSt tx
+  runTest $ validateOutsideForecast ei sysSt tx
 
   {-   txins txb ≠ ∅   -}
-  runValidationStaticTransMaybe fromShelleyFailure $ Shelley.validateInputSetEmptyUTxO txb
+  runTestOnSignal $ Shelley.validateInputSetEmptyUTxO txb
 
   {-   feesOK pp tx utxo   -}
-  runValidation $ whoops (feesOK pp tx utxo) -- Generalizes the fee to small from earlier Era's
+  runTest $ feesOK pp tx utxo -- Generalizes the fee to small from earlier Era's
 
   {- inputsAndCollateral = txins txb ∪ collateral txb -}
   {- (txins txb) ∪ (collateral txb) ⊆ dom utxo   -}
-  runValidationTransMaybe fromShelleyFailure $
+  runTest $
     Shelley.validateBadInputsUTxO utxo inputsAndCollateral
 
   {- consumed pp utxo txb = produced pp poolParams txb -}
-  runValidationTransMaybe fromShelleyMAFailure $
+  runTest $
     ShelleyMA.validateValueNotConservedUTxO pp utxo stakepools txb
 
   {-   adaID ∉ supp mint tx   -}
-  runValidationStaticTransMaybe fromShelleyMAFailure $
+  runTestOnSignal $
     ShelleyMA.validateTriesToForgeADA txb
 
   let outputs = txouts txb
   {-   ∀ txout ∈ txouts txb, getValuetxout ≥ inject (uxoEntrySizetxout ∗ coinsPerUTxOWord p) -}
-  runValidation $ validateOutputTooSmallUTxO pp outputs
+  runTest $ validateOutputTooSmallUTxO pp outputs
 
   {-   ∀ txout ∈ txouts txb, serSize (getValue txout) ≤ maxValSize pp   -}
-  runValidation $ validateOutputTooBigUTxO pp outputs
+  runTest $ validateOutputTooBigUTxO pp outputs
 
   {- ∀ ( _ ↦ (a,_)) ∈ txoutstxb,  a ∈ Addrbootstrap → bootstrapAttrsSize a ≤ 64 -}
-  runValidationStaticTransMaybe fromShelleyFailure $
+  runTestOnSignal $
     Shelley.validateOutputBootAddrAttrsTooBig outputs
 
   netId <- liftSTS $ asks networkId
 
   {- ∀(_ → (a, _)) ∈ txouts txb, netId a = NetworkId -}
-  runValidationStaticTransMaybe fromShelleyFailure $ Shelley.validateWrongNetwork netId txb
+  runTestOnSignal $ Shelley.validateWrongNetwork netId txb
 
   {- ∀(a → ) ∈ txwdrls txb, netId a = NetworkId -}
-  runValidationStaticTransMaybe fromShelleyFailure $ Shelley.validateWrongNetworkWithdrawal netId txb
+  runTestOnSignal $ Shelley.validateWrongNetworkWithdrawal netId txb
 
   {- (txnetworkid txb = NetworkId) ∨ (txnetworkid txb = ◇) -}
-  runValidationStatic $ validateWrongNetworkInTxBody netId txb
+  runTestOnSignal $ validateWrongNetworkInTxBody netId txb
 
   {- txsize tx ≤ maxTxSize pp -}
-  runValidationTransMaybe fromShelleyFailure $ Shelley.validateMaxTxSizeUTxO pp tx
+  runTestOnSignal $ Shelley.validateMaxTxSizeUTxO pp tx
 
   {-   totExunits tx ≤ maxTxExUnits pp    -}
-  runValidation $ validateExUnitsTooBigUTxO pp tx
+  runTest $ validateExUnitsTooBigUTxO pp tx
 
   {-   ‖collateral tx‖  ≤  maxCollInputs pp   -}
-  runValidation $ validateTooManyCollateralInputs pp txb
+  runTest $ validateTooManyCollateralInputs pp txb
 
   trans @(Core.EraRule "UTXOS" era) =<< coerce <$> judgmentContext
 
--}
+
+--------------------------------------------------------------------------------
+-- BabbageUTXO STS
+--------------------------------------------------------------------------------
+
+instance
+  forall era.
+  ( ValidateScript era,
+    Era era,
+    ValidateScript era,
+    ConcreteBabbage era, -- Unlike the Tests, we are only going to use this once, so we fix the Core.XX types
+    Core.Tx era ~ ValidatedTx era,
+    Core.Witnesses era ~ TxWitness era,
+    -- instructions for calling UTXOS from BabbageUTXO
+    Embed (Core.EraRule "UTXOS" era) (BabbageUTXO era),
+    Environment (Core.EraRule "UTXOS" era) ~ Shelley.UtxoEnv era,
+    State (Core.EraRule "UTXOS" era) ~ Shelley.UTxOState era,
+    Signal (Core.EraRule "UTXOS" era) ~ Core.Tx era,
+    Inject (PredicateFailure (Core.EraRule "PPUP" era)) (PredicateFailure (Core.EraRule "UTXOS" era)),
+    Eq (PredicateFailure (Core.EraRule "UTXO" era)),
+    Show (PredicateFailure (Core.EraRule "UTXO" era))
+  ) =>
+  STS (BabbageUTXO era)
+  where
+  type State (BabbageUTXO era) = Shelley.UTxOState era
+  type Signal (BabbageUTXO era) = ValidatedTx era
+  type Environment (BabbageUTXO era) = Shelley.UtxoEnv era
+  type BaseM (BabbageUTXO era) = ShelleyBase
+  type PredicateFailure (BabbageUTXO era) = BabbageUtxoPred era
+  type Event (BabbageUTXO era) = UtxoEvent era
+
+  initialRules = []
+  transitionRules = [utxoTransition]
+
+instance
+  ( Era era,
+    STS (BabbageUTXOS era),
+    PredicateFailure (Core.EraRule "UTXOS" era) ~ UtxosPredicateFailure era,
+    Event (Core.EraRule "UTXOS" era) ~ Event (BabbageUTXOS era)
+  ) =>
+  Embed (BabbageUTXOS era) (BabbageUTXO era)
+  where
+  wrapFailed =  FromAlonzoUtxoFail . UtxosFailure 
+  wrapEvent = UtxosEvent

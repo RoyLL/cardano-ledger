@@ -17,9 +17,10 @@ module Cardano.Ledger.Alonzo.Rules.Utxo where
 -- Inject instances
 import Cardano.Binary (FromCBOR (..), ToCBOR (..), serialize)
 import Cardano.Ledger.Address (Addr (..), RewardAcnt)
+import Cardano.Ledger.Alonzo.PParams(PParams'(..)) -- we need the fields 
 import Cardano.Ledger.Alonzo.Data (DataHash, dataHashSize)
-import Cardano.Ledger.Alonzo.Rules.Utxos (UTXOS, UtxosPredicateFailure)
-import Cardano.Ledger.Alonzo.Scripts (ExUnits (..), Prices, pointWiseExUnits)
+import Cardano.Ledger.Alonzo.Rules.Utxos (UTXOS, UtxosPredicateFailure,ConcreteAlonzo)
+import Cardano.Ledger.Alonzo.Scripts (ExUnits (..),pointWiseExUnits)
 import Cardano.Ledger.Alonzo.Tx (ValidatedTx (..), totExUnits)
 import qualified Cardano.Ledger.Alonzo.Tx as Alonzo (ValidatedTx)
 import qualified Cardano.Ledger.Alonzo.TxSeq as Alonzo (TxSeq)
@@ -51,11 +52,9 @@ import Cardano.Ledger.Rules.ValidationMode
     runTest,
     runTestOnSignal,
   )
-import Cardano.Ledger.Shelley.Constraints (UsesPParams)
 import qualified Cardano.Ledger.Shelley.LedgerState as Shelley
 import qualified Cardano.Ledger.Shelley.Rules.Utxo as Shelley
 import Cardano.Ledger.Shelley.Tx (TxIn)
-import Cardano.Ledger.Shelley.TxBody (DCert, Wdrl)
 import Cardano.Ledger.Shelley.UTxO (UTxO (..), balance, txouts)
 import Cardano.Ledger.ShelleyMA.Rules.Utxo ()
 import qualified Cardano.Ledger.ShelleyMA.Rules.Utxo as ShelleyMA
@@ -86,7 +85,6 @@ import qualified Data.Compact.SplitMap as SplitMap
 import Data.Either (isRight)
 import Data.Foldable (foldl', sequenceA_)
 import Data.Ratio ((%))
-import Data.Sequence.Strict (StrictSeq)
 import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Typeable (Typeable)
@@ -462,40 +460,16 @@ utxoTransition ::
   forall era.
   ( Era era,
     ValidateScript era,
+    ConcreteAlonzo era, -- Unlike the Tests, we are ony going to use this once, so we fix the Core.XX types
+    Core.Tx era ~ ValidatedTx era,
+    Core.Witnesses era ~ TxWitness era,
+    STS (AlonzoUTXO era),
     -- instructions for calling UTXOS from AlonzoUTXO
     Embed (Core.EraRule "UTXOS" era) (AlonzoUTXO era),
     Environment (Core.EraRule "UTXOS" era) ~ Shelley.UtxoEnv era,
     State (Core.EraRule "UTXOS" era) ~ Shelley.UTxOState era,
     Signal (Core.EraRule "UTXOS" era) ~ Core.Tx era,
-    Inject (PredicateFailure (Core.EraRule "PPUP" era)) (PredicateFailure (Core.EraRule "UTXOS" era)),
-    -- We leave Core.PParams abstract
-    UsesPParams era,
-    Core.ChainData (Core.Value era),
-    Core.ChainData (Core.TxOut era),
-    Core.ChainData (Core.TxBody era),
-    HasField "_minfeeA" (Core.PParams era) Natural,
-    HasField "_minfeeB" (Core.PParams era) Natural,
-    HasField "_keyDeposit" (Core.PParams era) Coin,
-    HasField "_poolDeposit" (Core.PParams era) Coin,
-    HasField "_maxTxSize" (Core.PParams era) Natural,
-    HasField "_prices" (Core.PParams era) Prices,
-    HasField "_maxTxExUnits" (Core.PParams era) ExUnits,
-    HasField "_coinsPerUTxOWord" (Core.PParams era) Coin,
-    HasField "_maxValSize" (Core.PParams era) Natural,
-    HasField "_collateralPercentage" (Core.PParams era) Natural,
-    HasField "_maxCollateralInputs" (Core.PParams era) Natural,
-    Core.Tx era ~ Alonzo.ValidatedTx era,
-    Core.Witnesses era ~ TxWitness era,
-    Era.TxSeq era ~ Alonzo.TxSeq era,
-    HasField "vldt" (Core.TxBody era) ValidityInterval,
-    HasField "inputs" (Core.TxBody era) (Set (TxIn (Crypto era))),
-    HasField "collateral" (Core.TxBody era) (Set (TxIn (Crypto era))),
-    HasField "mint" (Core.TxBody era) (Core.Value era),
-    HasField "wdrls" (Core.TxBody era) (Wdrl (Crypto era)),
-    HasField "certs" (Core.TxBody era) (StrictSeq (DCert (Crypto era))),
-    HasField "datahash" (Core.TxOut era) (StrictMaybe (DataHash (Crypto era))),
-    ToCBOR (Core.Value era),
-    HasField "txnetworkid" (Core.TxBody era) (StrictMaybe Network)
+    Inject (PredicateFailure (Core.EraRule "PPUP" era)) (PredicateFailure (Core.EraRule "UTXOS" era))
   ) =>
   TransitionRule (AlonzoUTXO era)
 utxoTransition = do
@@ -578,41 +552,15 @@ utxoTransition = do
 instance
   forall era.
   ( ValidateScript era,
-    -- Instructions needed to call the UTXOS transition from this one.
+    ConcreteAlonzo era, -- Unlike the Tests, we are only going to use this once, so we fix the Core.XX types
+    Core.Tx era ~ ValidatedTx era,
+    Core.Witnesses era ~ TxWitness era,
     Embed (Core.EraRule "UTXOS" era) (AlonzoUTXO era),
     Environment (Core.EraRule "UTXOS" era) ~ Shelley.UtxoEnv era,
     State (Core.EraRule "UTXOS" era) ~ Shelley.UTxOState era,
     Signal (Core.EraRule "UTXOS" era) ~ ValidatedTx era,
     Inject (PredicateFailure (Core.EraRule "PPUP" era)) (PredicateFailure (Core.EraRule "UTXOS" era)),
-    -- We leave Core.PParams abstract
-    ToCBOR (Core.Value era),
-    Core.ChainData (Core.Value era),
-    Core.ChainData (Core.TxOut era),
-    Core.ChainData (Core.TxBody era),
-    UsesPParams era,
-    HasField "_keyDeposit" (Core.PParams era) Coin,
-    HasField "_minfeeA" (Core.PParams era) Natural,
-    HasField "_minfeeB" (Core.PParams era) Natural,
-    HasField "_keyDeposit" (Core.PParams era) Coin,
-    HasField "_poolDeposit" (Core.PParams era) Coin,
-    HasField "_maxTxSize" (Core.PParams era) Natural,
-    HasField "_prices" (Core.PParams era) Prices,
-    HasField "_maxTxExUnits" (Core.PParams era) ExUnits,
-    HasField "_coinsPerUTxOWord" (Core.PParams era) Coin,
-    HasField "_maxValSize" (Core.PParams era) Natural,
-    HasField "_collateralPercentage" (Core.PParams era) Natural,
-    HasField "_maxCollateralInputs" (Core.PParams era) Natural,
-    HasField "txnetworkid" (Core.TxBody era) (StrictMaybe Network),
-    HasField "certs" (Core.TxBody era) (StrictSeq (DCert (Crypto era))),
-    HasField "collateral" (Core.TxBody era) (Set (TxIn (Crypto era))),
-    HasField "datahash" (Core.TxOut era) (StrictMaybe (DataHash (Crypto era))),
-    HasField "inputs" (Core.TxBody era) (Set (TxIn (Crypto era))),
-    HasField "mint" (Core.TxBody era) (Core.Value era),
-    HasField "vldt" (Core.TxBody era) ValidityInterval,
-    HasField "wdrls" (Core.TxBody era) (Wdrl (Crypto era)),
-    Core.Witnesses era ~ TxWitness era,
-    Era.TxSeq era ~ Alonzo.TxSeq era,
-    Core.Tx era ~ Alonzo.ValidatedTx era
+    Era.TxSeq era ~ Alonzo.TxSeq era
   ) =>
   STS (AlonzoUTXO era)
   where

@@ -25,6 +25,7 @@ module Cardano.Ledger.Alonzo.Rules.Utxos
     invalidEnd,
     UtxosEvent,
     (?!##),
+    ConcreteAlonzo,
   )
 where
 
