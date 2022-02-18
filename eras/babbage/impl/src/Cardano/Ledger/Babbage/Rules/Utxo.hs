@@ -24,7 +24,7 @@ import Control.State.Transition.Extended
     -- RuleType (Transition),
     STS (..),
     TRC (..),
-    TransitionRule (..),
+    TransitionRule,
     judgmentContext,
     liftSTS,
     trans,
@@ -34,17 +34,15 @@ import Cardano.Ledger.Alonzo.Rules.Utxo
   ( -- AlonzoUTXO,
     UtxoEvent (..),
     UtxoPredicateFailure (..),
-    -- fromShelleyFailure,
-    -- fromShelleyMAFailure,
     vKeyLocked,
-    validateCollateral,
-    validateCollateralContainsNonADA,
+    -- validateCollateral,
+    -- validateCollateralContainsNonADA,
     validateExUnitsTooBigUTxO,
-    validateInsufficientCollateral,
+    -- validateInsufficientCollateral,
     validateOutputTooBigUTxO,
     validateOutputTooSmallUTxO,
     validateOutsideForecast,
-    validateScriptsNotPaidUTxO,
+    -- validateScriptsNotPaidUTxO,
     validateTooManyCollateralInputs,
     validateWrongNetworkInTxBody,
   )
@@ -90,14 +88,11 @@ import Data.Coerce (coerce)
 import Data.Maybe.Strict(StrictMaybe(..))
 import qualified Data.Set as Set
 import Cardano.Ledger.BaseTypes
-  ( Network,
-    ShelleyBase,
-    StrictMaybe (..),
+  ( ShelleyBase,
     epochInfoWithErr,
     networkId,
     systemStart,
   )
-
 import Cardano.Ledger.Babbage.Rules.Utxos (BabbageUTXOS,ConcreteBabbage)
 import Cardano.Ledger.Babbage.PParams(PParams'(..))
 -- ======================================================
@@ -184,24 +179,24 @@ feesOK pp tx (UTxO utxo) = do
    [ failureUnless (minimumFee <= theFee) (inject (FeeTooSmallUTxO @era minimumFee theFee))
    , -- Part 2 (txrdmrs tx /= ◇ ⇒ ... )
      if (nullRedeemers . txrdmrs' . wits $ tx) then pure () else 
-            let valbalance = collBalance txb (UTxO utxo)
-                balance = Val.coin valbalance
+            let valbalance = collBalance txb (UTxO utxo)  -- Collateral as Value
+                coinbalance = Val.coin valbalance         -- Collateral as a Coin
                 collat = collateral' txb SplitMap.◁ utxo
                 -- collat is the UTxO restricted to the inputs allocated to pay the Fee
              in sequenceA_
                 [ -- Part 3 ((∀(a, , ) ∈ range (collInputs txb ◁ utxo), paymentHK a ∈ Addr^{vkey})
                   failureUnless (all vKeyLocked collat)
                                 (inject (ScriptsNotPaidUTxO (UTxO (SplitMap.filter (not . vKeyLocked) collat))))
-                , -- Part 4 (balance ≥ minCollateral tx pp)
-                  failureUnless
-                     (balance >= minCollateral txb pp)
-                     (inject (InsufficientCollateral @era balance (minCollateral txb pp)))
-                , -- Part 5 (adaOnly balance)
+                , -- Part 4 (adaOnly balance)
                   failureUnless (Val.adaOnly valbalance) (inject (CollateralContainsNonADA @era valbalance))
+                , -- Part 5 (balance ≥ minCollateral tx pp)
+                  failureUnless
+                     (coinbalance>= minCollateral txb pp)
+                     (inject (InsufficientCollateral @era coinbalance (minCollateral txb pp)))
                 , -- Part 6 ((txcoll tx 6 = 3) ⇒ balance = txcoll tx)
                   case collateralReturn' txb of
                     SNothing -> pure ()
-                    SJust _txout -> failureUnless (balance == total) (inject (UnequalCollateralReturn @era balance total))
+                    SJust _txout -> failureUnless (coinbalance == total) (inject (UnequalCollateralReturn @era coinbalance total))
                       where total = totalCollateral' txb
                 , -- Part 7 (collInputs tx 6 = ∅)
                   failureUnless (not (Set.null (collateral' txb))) (inject (NoCollateralInputs @era))
@@ -218,14 +213,8 @@ utxoTransition ::
     ConcreteBabbage era, -- Unlike the Tests, we are only going to use this once, so we fix the Core.XX types
     Core.Tx era ~ ValidatedTx era,
     Core.Witnesses era ~ TxWitness era,
-    -- We will use this function int the STS instance for (BabbageUTXO era)
     STS (BabbageUTXO era),
-    Environment (BabbageUTXO era) ~ Shelley.UtxoEnv era,
-    State (BabbageUTXO era) ~ Shelley.UTxOState era,
-    Signal (BabbageUTXO era) ~ ValidatedTx era,
-    BaseM (BabbageUTXO era) ~ ShelleyBase,
-    PredicateFailure (BabbageUTXO era) ~ BabbageUtxoPred era,
-    -- instructions for calling UTXOS from BabbageUTXO
+    -- In this function we we call the UTXOS rule, so we need some assumptions
     Embed (Core.EraRule "UTXOS" era) (BabbageUTXO era),
     Environment (Core.EraRule "UTXOS" era) ~ Shelley.UtxoEnv era,
     State (Core.EraRule "UTXOS" era) ~ Shelley.UTxOState era,
@@ -239,10 +228,11 @@ utxoTransition = do
 
   {-   txb := txbody tx   -}
   let txb = body tx
-      inputsAndCollateral =
-        Set.union
-          (getField @"inputs" txb)
-          (getField @"collateral" txb)
+      allInputs =
+        Set.unions
+          [ getField @"inputs" txb,
+            getField @"collateral" txb,
+            getField @"referenceInputs" txb ] -- NEW TO Babbage UTXO rule
 
   {- ininterval slot (txvld txb) -}
   runTest $
@@ -260,10 +250,10 @@ utxoTransition = do
   {-   feesOK pp tx utxo   -}
   runTest $ feesOK pp tx utxo -- Generalizes the fee to small from earlier Era's
 
-  {- inputsAndCollateral = txins txb ∪ collateral txb -}
-  {- (txins txb) ∪ (collateral txb) ⊆ dom utxo   -}
+  {- allInputs = spendInputs txb ∪ collInputs txb ∪ refInputs txb -}
+  {- (spendInputs txb ∪ collInputs txb ∪ refInputs txb) ⊆ dom utxo   -}
   runTest $
-    Shelley.validateBadInputsUTxO utxo inputsAndCollateral
+    Shelley.validateBadInputsUTxO utxo allInputs
 
   {- consumed pp utxo txb = produced pp poolParams txb -}
   runTest $
@@ -273,16 +263,16 @@ utxoTransition = do
   runTestOnSignal $
     ShelleyMA.validateTriesToForgeADA txb
 
-  let outputs = txouts txb
+  let outs = txouts txb
   {-   ∀ txout ∈ txouts txb, getValuetxout ≥ inject (uxoEntrySizetxout ∗ coinsPerUTxOWord p) -}
-  runTest $ validateOutputTooSmallUTxO pp outputs
+  runTest $ validateOutputTooSmallUTxO pp outs
 
   {-   ∀ txout ∈ txouts txb, serSize (getValue txout) ≤ maxValSize pp   -}
-  runTest $ validateOutputTooBigUTxO pp outputs
+  runTest $ validateOutputTooBigUTxO pp outs
 
   {- ∀ ( _ ↦ (a,_)) ∈ txoutstxb,  a ∈ Addrbootstrap → bootstrapAttrsSize a ≤ 64 -}
   runTestOnSignal $
-    Shelley.validateOutputBootAddrAttrsTooBig outputs
+    Shelley.validateOutputBootAddrAttrsTooBig outs
 
   netId <- liftSTS $ asks networkId
 
@@ -325,8 +315,7 @@ instance
     State (Core.EraRule "UTXOS" era) ~ Shelley.UTxOState era,
     Signal (Core.EraRule "UTXOS" era) ~ Core.Tx era,
     Inject (PredicateFailure (Core.EraRule "PPUP" era)) (PredicateFailure (Core.EraRule "UTXOS" era)),
-    Eq (PredicateFailure (Core.EraRule "UTXO" era)),
-    Show (PredicateFailure (Core.EraRule "UTXO" era))
+    PredicateFailure (Core.EraRule "UTXO" era) ~ BabbageUtxoPred era
   ) =>
   STS (BabbageUTXO era)
   where

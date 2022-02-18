@@ -33,6 +33,7 @@ import qualified Cardano.Ledger.Core as Core
 import qualified Cardano.Ledger.Babbage.Tx as Babbage
 import qualified Cardano.Ledger.Babbage.TxBody as Babbage
 import qualified Cardano.Ledger.Babbage.PParams as Babbage
+import qualified Cardano.Ledger.Babbage.Collateral as Babbage
 import qualified Cardano.Ledger.Alonzo.Scripts as Alonzo
 import qualified Cardano.Ledger.Mary.Value as Mary
 import Cardano.Ledger.Alonzo.Tx(IsValid(..))
@@ -42,7 +43,8 @@ import Cardano.Ledger.BaseTypes(ShelleyBase,systemStart, epochInfo)
 import Cardano.Binary (ToCBOR (..)) --FromCBOR (..))
 import qualified Data.Compact.SplitMap as SplitMap
 import Cardano.Ledger.Shelley.LedgerState (PPUPState (..), UTxOState (..),keyRefunds, updateStakeDistribution)
-import Cardano.Ledger.Shelley.UTxO (UTxO (..), balance, totalDeposits)
+import Cardano.Ledger.Shelley.UTxO (UTxO (..), totalDeposits)
+import qualified Cardano.Ledger.TxIn as Core (TxIn(..),txid)
 
 import Cardano.Ledger.Alonzo.PlutusScriptApi
   ( -- CollectError,
@@ -71,7 +73,26 @@ type ConcreteBabbage era =
     Core.PParamsDelta era ~ Babbage.PParamsUpdate era,
     Core.TxOut era ~ Babbage.TxOut era
   )
-  
+
+
+{-
+babbageUtxosDelta ::
+  ( Era era,
+    Core.TxBody era ~ TxBody era
+  ) =>
+  UtxosDelta BabbageUTXOS era
+babbageUtxosDelta = UtxosDelta collBalFee id
+  where
+    collBalFee txb utxo = (UTxO utxoKeep, UTxO utxoDel, coin_)
+      where
+        !(!utxoKeep, !utxoDel) =
+          SplitMap.extractKeysSet
+            (unUTxO utxo)
+            (getField @"collateral" txb)
+        !coin_ = Val.coin (collBalance txb (UTxO utxoDel))
+-}
+
+
 data BabbageUTXOS era
 
 instance
@@ -109,12 +130,12 @@ utxosTransition ::
 utxosTransition =
   judgmentContext >>= \(TRC (_, _, tx)) -> do
     case getField @"isValid" tx of
-      IsValid True -> scriptsValidateTransition
-      IsValid False -> scriptsNotValidateTransition
+      IsValid True -> scriptsYes
+      IsValid False ->  scriptsNo
 
 -- ===================================================================
 
-scriptsValidateTransition ::
+scriptsYes ::
   forall era.
   ( ValidateScript era,
     ConcreteBabbage era,
@@ -125,21 +146,26 @@ scriptsValidateTransition ::
     Embed (Core.EraRule "PPUP" era) (BabbageUTXOS era)
   ) =>
   TransitionRule (BabbageUTXOS era)
-scriptsValidateTransition = do
+scriptsYes = do
   TRC (UtxoEnv slot pp poolParams genDelegs, u@(UTxOState utxo _ _ pup _), tx) <-
     judgmentContext
-  let txb = body tx
+  let {- txb := txbody tx -}
+      txb = body tx
+      {- refunded := keyRefunds pp txb -}
       refunded = keyRefunds pp txb
       txcerts = toList $ getField @"certs" txb
+      {- depositChange := (totalDeposits pp poolParams txcerts txb) − refunded -}
       depositChange =
         totalDeposits pp (`Map.notMember` poolParams) txcerts Val.<-> refunded
   sysSt <- liftSTS $ asks systemStart
   ei <- liftSTS $ asks epochInfo
   
   let !_ = traceEvent validBegin ()
- 
+
+  {- sLst := collectTwoPhaseScriptInputs pp tx utxo -}
   case collectTwoPhaseScriptInputs ei sysSt pp tx utxo of
     Right sLst ->
+      {- isValid tx = evalScripts tx sLst = True -}
       case evalScripts @era tx sLst of
         Fails sss ->
           False
@@ -158,15 +184,16 @@ scriptsValidateTransition = do
 
   pure $! updateUTxOState u txb depositChange ppup'
 
-scriptsNotValidateTransition ::
+scriptsNo ::
   forall era.
   ( ValidateScript era,
     ConcreteBabbage era,
     STS(BabbageUTXOS era)
   ) =>
   TransitionRule (BabbageUTXOS era)
-scriptsNotValidateTransition = do
+scriptsNo = do
   TRC (UtxoEnv _ pp _ _, us@(UTxOState utxo _ fees _ _), tx) <- judgmentContext
+      {- txb := txbody tx -}
   let txb = body tx
   sysSt <- liftSTS $ asks systemStart
   ei <- liftSTS $ asks epochInfo
@@ -174,7 +201,8 @@ scriptsNotValidateTransition = do
   let !_ = traceEvent invalidBegin ()
   
   case collectTwoPhaseScriptInputs ei sysSt pp tx utxo of
-    Right sLst ->
+    Right sLst -> {- sLst := collectTwoPhaseScriptInputs pp tx utxo -}
+      {- isValid tx = evalScripts tx sLst = False -}
       case evalScripts @era tx sLst of
         Passes -> False ?!## ValidationTagMismatch (getField @"isValid" tx) PassedUnexpectedly
         Fails _sss -> pure ()
@@ -186,9 +214,18 @@ scriptsNotValidateTransition = do
       {- utxoDel  = getField @"collateral" txb ◁ utxo -}
       !(!utxoKeep, !utxoDel) =
         SplitMap.extractKeysSet (unUTxO utxo) (getField @"collateral" txb)
+      collOuts = case getField @"collateralReturn" txb of   -- NEW to Babbage
+                   SJust z -> SplitMap.singleton (collateralReturnTxIn txb) z
+                   SNothing -> SplitMap.empty
+      collateralFees = Val.coin (Babbage.collBalance txb utxo) -- NEW to Babbage
   pure
-    $! us
-      { _utxo = UTxO utxoKeep,
-        _fees = fees <> Val.coin (balance (UTxO utxoDel)),
+    $! us       {- (collInputs txb ⋪ utxo) ∪ collOuts tx -}
+      { _utxo = UTxO (SplitMap.union utxoKeep collOuts),    -- NEW to Babbage
+        _fees = fees <> collateralFees ,                    -- NEW to Babbage
         _stakeDistro = updateStakeDistribution (_stakeDistro us) (UTxO utxoDel) mempty
       }
+
+-- I AM ASSUMING There is only ONE TxOut if the Tx does not validate,
+-- and that output's cooresponding TxIn has (Ix 0) (minBound)
+collateralReturnTxIn :: Era era => Core.TxBody era -> Core.TxIn (Crypto era)
+collateralReturnTxIn txb = Core.TxIn (Core.txid txb) minBound
